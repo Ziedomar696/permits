@@ -366,27 +366,39 @@ function scanFile(token, b64, mime, name) {
   var blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, name);
   var file = folder_().createFile(blob);
   var res = { fileId: file.getId(), fileName: name, fileMime: mime, text: '', warning: '' };
-  res.text = ocr_(blob);
-  if (!res.text) res.warning = typeof Drive === 'undefined'
-    ? 'القراءة التلقائية مش متفعلة (Services ← Drive API). كمّل البيانات يدوي.'
-    : 'مقدرتش أقرا كلام من الملف. كمّل البيانات يدوي.';
+  var o = ocr_(blob);
+  res.text = o.text;
+  if (!res.text) res.warning = o.error
+    ? 'القراءة التلقائية وقفت: ' + o.error + ' — كمّل البيانات يدوي.'
+    : 'مفيش كلام اتقرا من الملف. كمّل البيانات يدوي.';
   res.fields = parseDoc_(res.text, name, config_().sectors);
   return res;
 }
 
 function ocr_(blob) {
-  if (typeof Drive === 'undefined') return '';
-  var id, text = '';
+  if (typeof Drive === 'undefined') return { text: '', error: 'خدمة Drive API مش ظاهرة للنسخة المنشورة (اعمل Deploy ← New version)' };
+  var id, text = '', error = '';
   try {
     if (Drive.Files.create) id = Drive.Files.create({ name: 'permit-ocr', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'ar' }).id;
-    else id = Drive.Files.insert({ title: 'permit-ocr', mimeType: blob.getContentType() }, blob, { ocr: true, ocrLanguage: 'ar', convert: true }).id;
+    else id = Drive.Files.insert({ title: 'permit-ocr', mimeType: 'application/vnd.google-apps.document' }, blob, { ocr: true, ocrLanguage: 'ar', convert: true }).id;
     text = DocumentApp.openById(id).getBody().getText();
   } catch (e) {
-    text = '';
+    error = String(e && e.message || e).slice(0, 200);
   } finally {
     try { if (id) DriveApp.getFileById(id).setTrashed(true); } catch (e2) {}
   }
-  return text || '';
+  return { text: text || '', error: error };
+}
+
+/** للفحص من المحرر: بيقرا آخر ملف اترفع ويطبع النتيجة في الـ Execution log. */
+function testOcr() {
+  var it = folder_().getFiles(), last = null;
+  while (it.hasNext()) { var f = it.next(); if (!last || f.getDateCreated() > last.getDateCreated()) last = f; }
+  if (!last) { Logger.log('مفيش ملفات مرفوعة لسه. ارفع صورة من البرنامج الأول.'); return; }
+  Logger.log('الملف: ' + last.getName() + ' · Drive API: ' + (typeof Drive === 'undefined' ? 'مش موجود' : (Drive.Files.create ? 'v3' : 'v2')));
+  var o = ocr_(last.getBlob());
+  Logger.log(o.error ? 'خطأ: ' + o.error : 'اتقرا ' + o.text.length + ' حرف:\n' + o.text.slice(0, 500));
+  Logger.log(JSON.stringify(parseDoc_(o.text, last.getName(), config_().sectors)));
 }
 
 function getFile(token, fileId) {
