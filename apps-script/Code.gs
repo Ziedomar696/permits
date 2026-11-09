@@ -380,7 +380,7 @@ function ocr_(blob) {
   var id, text = '', error = '';
   try {
     if (Drive.Files.create) id = Drive.Files.create({ name: 'permit-ocr', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'ar' }).id;
-    else id = Drive.Files.insert({ title: 'permit-ocr', mimeType: 'application/vnd.google-apps.document' }, blob, { ocr: true, ocrLanguage: 'ar', convert: true }).id;
+    else id = Drive.Files.insert({ title: 'permit-ocr', mimeType: blob.getContentType() }, blob, { ocr: true, ocrLanguage: 'ar' }).id;
     text = DocumentApp.openById(id).getBody().getText();
   } catch (e) {
     error = String(e && e.message || e).slice(0, 200);
