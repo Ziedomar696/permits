@@ -357,7 +357,7 @@ function folder_() {
   return f;
 }
 
-function scanFile(token, b64, mime, name) {
+function scanFile(token, b64, mime, name, pageImg) {
   var user = session_(token);
   need_(user, ['admin', 'entry']);
   mime = String(mime || 'application/octet-stream');
@@ -366,7 +366,9 @@ function scanFile(token, b64, mime, name) {
   var blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, name);
   var file = folder_().createFile(blob);
   var res = { fileId: file.getId(), fileName: name, fileMime: mime, text: '', warning: '' };
-  var o = ocr_(blob);
+  // الـ PDF بيتقرا من صورة أول صفحة (أسرع، ومن غير حد الـ OCR بتاع ملفات الـ PDF)
+  var ocrBlob = /pdf/.test(mime) && pageImg ? Utilities.newBlob(Utilities.base64Decode(pageImg), 'image/jpeg', 'page1.jpg') : blob;
+  var o = ocr_(ocrBlob);
   res.text = o.text;
   if (!res.text) res.warning = o.error
     ? 'القراءة التلقائية وقفت: ' + o.error + ' — كمّل البيانات يدوي.'
@@ -378,15 +380,22 @@ function scanFile(token, b64, mime, name) {
 function ocr_(blob) {
   if (typeof Drive === 'undefined') return { text: '', error: 'خدمة Drive API مش ظاهرة للنسخة المنشورة (اعمل Deploy ← New version)' };
   var id, text = '', error = '';
-  try {
-    if (Drive.Files.create) id = Drive.Files.create({ name: 'permit-ocr', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'ar' }).id;
-    else id = Drive.Files.insert({ title: 'permit-ocr', mimeType: blob.getContentType() }, blob, { ocr: true, ocrLanguage: 'ar' }).id;
-    text = DocumentApp.openById(id).getBody().getText();
-  } catch (e) {
-    error = String(e && e.message || e).slice(0, 200);
-  } finally {
-    try { if (id) DriveApp.getFileById(id).setTrashed(true); } catch (e2) {}
+  for (var attempt = 0; attempt < 3; attempt++) {
+    error = '';
+    try {
+      if (Drive.Files.create) id = Drive.Files.create({ name: 'permit-ocr', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'ar' }).id;
+      else id = Drive.Files.insert({ title: 'permit-ocr', mimeType: blob.getContentType() }, blob, { ocr: true, ocrLanguage: 'ar' }).id;
+      text = DocumentApp.openById(id).getBody().getText();
+    } catch (e) {
+      error = String(e && e.message || e).slice(0, 200);
+    } finally {
+      try { if (id) DriveApp.getFileById(id).setTrashed(true); } catch (e2) {}
+      id = null;
+    }
+    if (!error || !/rate limit|quota|backend|internal/i.test(error)) break;
+    Utilities.sleep(2500 * (attempt + 1));   // جوجل مزحوم: استنى وجرّب تاني
   }
+  if (/rate limit/i.test(error)) error = 'جوجل وقّف القراءة مؤقتًا من كتر الطلبات، جرّب كمان دقيقة';
   return { text: text || '', error: error };
 }
 
@@ -396,6 +405,7 @@ function testOcr() {
   while (it.hasNext()) { var f = it.next(); if (!last || f.getDateCreated() > last.getDateCreated()) last = f; }
   if (!last) { Logger.log('مفيش ملفات مرفوعة لسه. ارفع صورة من البرنامج الأول.'); return; }
   Logger.log('الملف: ' + last.getName() + ' · Drive API: ' + (typeof Drive === 'undefined' ? 'مش موجود' : (Drive.Files.create ? 'v3' : 'v2')));
+  if (/pdf/i.test(last.getMimeType())) Logger.log('ملحوظة: البرنامج بيقرا الـ PDF من صورة أول صفحة. الفحص ده بيجرّب الـ PDF نفسه، فالأفضل تجرّب بصورة أو سكرين شوت.');
   var o = ocr_(last.getBlob());
   Logger.log(o.error ? 'خطأ: ' + o.error : 'اتقرا ' + o.text.length + ' حرف:\n' + o.text.slice(0, 500));
   Logger.log(JSON.stringify(parseDoc_(o.text, last.getName(), config_().sectors)));
