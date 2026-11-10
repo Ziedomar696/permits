@@ -148,22 +148,22 @@
         <div class="grid">
           <label>نوع المستند<select id="f-type"></select></label>
           <label>القطاع <small>(بيروح لمشرفينه)</small><select id="f-sector"></select></label>
-          <label>رقم المستند<input id="f-refNo" dir="auto"></label>
+          <label class="hide">رقم المستند<input id="f-refNo" dir="auto"></label>
           <label id="l-unit">رقم الوحدة / المكان<input id="f-unit" dir="auto"></label>
           <label id="l-party">الاسم<input id="f-party"></label>
-          <label>تليفون<input id="f-contact" dir="ltr" inputmode="tel"></label>
+          <label class="hide">تليفون<input id="f-contact" dir="ltr" inputmode="tel"></label>
           <label>من تاريخ<input id="f-from" type="date"></label>
           <label>إلى تاريخ<input id="f-to" type="date"></label>
-          <label>عدد العمالة<input id="f-labor" inputmode="numeric"></label>
-          <label class="full">الموضوع / نوع التصريح<input id="f-title"></label>
-          <label class="full">الوصف<textarea id="f-description"></textarea></label>
+          <label class="hide">عدد العمالة<input id="f-labor" inputmode="numeric"></label>
+          <label class="full hide">الموضوع / نوع التصريح<input id="f-title"></label>
+          <label class="full" id="l-desc">الوصف<textarea id="f-description"></textarea></label>
         </div>
-        <h4 style="margin:14px 0 4px">الأشخاص <span class="muted">(المفوَّضين، المهندس، المسؤول...)</span></h4>
+        <h4 style="margin:14px 0 4px"><span id="peopleTitle">الأشخاص</span></h4>
         <table class="ed"><thead><tr><th>الاسم</th><th>رقم قومي / جواز</th><th>تليفون</th><th>الصفة</th><th></th></tr></thead><tbody id="peopleEd"></tbody></table>
         <button class="btn sec sm" id="addPerson" style="margin-top:6px">+ شخص</button>
-        <h4 style="margin:14px 0 4px">العربيات</h4>
+        <div class="hide"><h4 style="margin:14px 0 4px">العربيات</h4>
         <table class="ed"><thead><tr><th>رقم اللوحة</th><th>النوع / الموديل</th><th>اللون</th><th>صاحبها</th><th></th></tr></thead><tbody id="carsEd"></tbody></table>
-        <button class="btn sec sm" id="addCar" style="margin-top:6px">+ عربية</button>
+        <button class="btn sec sm" id="addCar" style="margin-top:6px">+ عربية</button></div>
         <label style="margin-top:14px">ملاحظات للمشرفين<textarea id="f-notes" style="min-height:50px"></textarea></label>
         <div class="err" id="ferr"></div>
         <div class="row">
@@ -481,11 +481,14 @@
   // ===== فورم الإضافة =====
   var LABELS = {
     unit: ['رقم الوحدة', 'اسم العميل'], project: ['المكان / الوحدة', 'الشركة / المقاول'], facility: ['المكان بالتفصيل', 'الشركة'],
-    delegation: ['رقم الوحدة', 'المالك / المستأجر'], retail: ['الموقع (MSA Location)', 'اسم المحل'], other: ['الوحدة / المكان', 'الاسم']
+    delegation: ['رقم الوحدة', 'اسم المالك'], retail: ['الموقع (MSA Location)', 'اسم المحل'], other: ['الوحدة / المكان', 'الاسم']
   };
   function setLabels(){
     var l = LABELS[$('#f-type').value] || LABELS.other;
     $('#l-unit').firstChild.nodeValue = l[0]; $('#l-party').firstChild.nodeValue = l[1];
+    var deleg = $('#f-type').value === 'delegation';
+    $('#l-desc').classList.toggle('hide', deleg);
+    $('#peopleTitle').textContent = deleg ? 'المفوَّضين' : 'الأشخاص';
   }
   $('#f-type').addEventListener('change', setLabels);
   var F = ['type', 'sector', 'refNo', 'unit', 'party', 'contact', 'from', 'to', 'labor', 'title', 'description', 'notes'];
@@ -579,11 +582,10 @@
     }).then(function(r){
       att = { fileId: r.fileId, fileName: r.fileName, fileMime: r.fileMime };
       var f = r.fields || {}, got = 0;
-      ['type', 'sector', 'refNo', 'unit', 'party', 'contact', 'from', 'to', 'labor', 'title', 'description'].forEach(function(k){
+      ['type', 'sector', 'unit', 'party', 'from', 'to', 'description'].forEach(function(k){
         if (f[k] && !(k === 'type' && f[k] === 'other')) { $('#f-' + k).value = f[k]; got++; }
       });
       (f.people || []).forEach(function(p){ edRow('p', p); got++; });
-      (f.vehicles || []).forEach(function(v){ edRow('c', v); got++; });
       setLabels();
       if (r.warning) { st.className = 'status warn'; st.textContent = '⚠️ ' + r.warning; }
       else if (got < 3) { st.className = 'status warn'; st.textContent = '⚠️ اتقرا جزء بسيط بس — كمّل الباقي من الصورة يدوي.'; }
