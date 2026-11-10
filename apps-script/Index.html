@@ -319,9 +319,9 @@
     window.scrollTo(0, 0);
   }
 
-  function sectorOptions(onlyMine){
+  function sectorOptions(onlyMine, onlyKind){
     var list = cfg.sectors.filter(function(s){ return !onlyMine || user.role !== 'supervisor' || user.sectors.indexOf('*') >= 0 || user.sectors.indexOf(String(s.id)) >= 0; });
-    var res = '', groups = ['سكني', 'تجاري'];
+    var res = '', groups = onlyKind ? [onlyKind] : ['سكني', 'تجاري'];
     groups.forEach(function(g){
       var items = list.filter(function(s){ return (s.kind || 'سكني') === g; });
       if (items.length) res += '<optgroup label="' + g + '">' + items.map(function(s){ return '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>'; }).join('') + '</optgroup>';
@@ -336,6 +336,7 @@
     $('#fType').innerHTML = '<option value="">كل الأنواع</option>' + tOpts;
     $('#f-type').innerHTML = tOpts;
     $('#f-sector').innerHTML = '<option value="">— اختار —</option>' + sectorOptions(false);
+    $('#f-sector').dataset.kind = '';
   }
 
   // ===== القائمة =====
@@ -351,6 +352,13 @@
     }).catch(function(e){ if (!/الجلسة/.test(e.message)) toast(e.message); });
   }
   ['#q', '#fSec', '#fType'].forEach(function(s){ $(s).addEventListener('input', renderList); });
+  // فلتر النوع = تصريح محلات → فلتر القطاع يعرض الأماكن التجارية بس
+  $('#fType').addEventListener('input', function(){
+    var sel = $('#fSec'), cur = sel.value, kind = this.value === 'retail' ? 'تجاري' : '';
+    sel.innerHTML = '<option value="">' + (kind ? 'كل الأماكن التجارية' : 'كل القطاعات') + '</option>' + sectorOptions(true, kind);
+    sel.value = Array.prototype.some.call(sel.options, function(o){ return o.value === cur; }) ? cur : '';
+    renderList();
+  });
 
   function matches(d, q){
     if (!q) return true;
@@ -486,8 +494,16 @@
   function setLabels(){
     var l = LABELS[$('#f-type').value] || LABELS.other;
     $('#l-unit').firstChild.nodeValue = l[0]; $('#l-party').firstChild.nodeValue = l[1];
-    var deleg = $('#f-type').value === 'delegation';
+    var deleg = $('#f-type').value === 'delegation', retail = $('#f-type').value === 'retail';
     $('#l-desc').classList.toggle('hide', deleg);
+    $('#l-unit').classList.toggle('hide', retail);
+    // المحلات: القطاع من الأماكن التجارية بس
+    var sel = $('#f-sector'), cur = sel.value, kind = retail ? 'تجاري' : '';
+    if (sel.dataset.kind !== kind) {
+      sel.innerHTML = '<option value="">— اختار —</option>' + sectorOptions(false, kind);
+      sel.dataset.kind = kind;
+      sel.value = Array.prototype.some.call(sel.options, function(o){ return o.value === cur; }) ? cur : '';
+    }
     $('#peopleTitle').textContent = deleg ? 'المفوَّضين' : 'الأشخاص';
   }
   $('#f-type').addEventListener('change', setLabels);
@@ -582,6 +598,8 @@
     }).then(function(r){
       att = { fileId: r.fileId, fileName: r.fileName, fileMime: r.fileMime };
       var f = r.fields || {}, got = 0;
+      if (!f.description && f.title) f.description = f.title;
+      if (f.type && f.type !== 'other') { $('#f-type').value = f.type; setLabels(); }
       ['type', 'sector', 'unit', 'party', 'from', 'to', 'description'].forEach(function(k){
         if (f[k] && !(k === 'type' && f[k] === 'other')) { $('#f-' + k).value = f[k]; got++; }
       });
@@ -598,6 +616,9 @@
   function save(allowDup){
     var d = { id: editingId, allowDup: allowDup, people: edRead('#peopleEd'), vehicles: edRead('#carsEd') };
     F.forEach(function(k){ d[k] = $('#f-' + k).value.trim(); });
+    if (d.type === 'retail') d.unit = '';
+    if (d.type === 'delegation') d.description = '';
+    ['refNo', 'contact', 'labor', 'title'].forEach(function(k){ if (!editingId) d[k] = ''; });
     if (att) { d.fileId = att.fileId; d.fileName = att.fileName; d.fileMime = att.fileMime; }
     $('#ferr').textContent = '';
     if (!d.sector) { $('#ferr').textContent = 'اختار القطاع عشان يوصل لمشرفينه.'; $('#f-sector').focus(); return; }
