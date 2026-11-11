@@ -359,7 +359,7 @@ function reportData(token) {
     docs: rows_('Docs').map(function (d) {
       return { id: d.id, type: d.type, sector: d.sector, from: d.from, to: d.to, status: d.status, unit: d.unit, party: d.party,
         title: d.title || d.description, createdAt: d.createdAt, updatedAt: d.updatedAt || d.createdAt,
-        people: parseJson_(d.people).length, acks: acks[d.id] || [] };
+        people: parseJson_(d.people).length, acks: acks[d.id] || [], imp: /^استيراد/.test(d.createdByName || '') };
     }),
     supervisors: rows_('Users').filter(function (u) { return u.role === 'supervisor' && u.active === 'yes'; }).map(userObj_)
   };
@@ -547,6 +547,38 @@ function matchSector_(text, type, sectors) {
     });
   });
   return best;
+}
+
+// ===== استيراد داتا قديمة (للمدير) =====
+// rows: [{refNo,type,sector,unit,party,from,to,description,notes,createdAt}] — اللي رقمه اتسجل قبل كده بيتشال
+function importDocs(token, rows, source) {
+  var user = session_(token);
+  need_(user, ['admin']);
+  if (!Array.isArray(rows) || !rows.length) throw new Error('الملف فاضي.');
+  if (rows.length > 600) throw new Error('ابعت ٦٠٠ صف بالكتير في المرة.');
+  return withLock_(function () {
+    var secs = rows_('Sectors');
+    if (rows.some(function (r) { return r.sector === 'x1'; }) && !secs.some(function (x) { return x.id === 'x1'; })) {
+      append_('Sectors', { id: 'x1', name: 'أماكن عامة / غير محدد', kind: 'سكني', keywords: '' });
+      secs = rows_('Sectors');
+    }
+    var ids = {}; secs.forEach(function (x) { ids[x.id] = 1; });
+    var seen = {}; rows_('Docs').forEach(function (d) { if (d.refNo) seen[d.refNo] = 1; });
+    var sh = sheet_('Docs'), h = header_(sh), out = [], skipped = 0, bad = 0, by = clean_(source || 'استيراد', 60);
+    rows.forEach(function (r) {
+      var ref = clean_(r.refNo, 60);
+      if (!ref || seen[ref]) { skipped++; return; }
+      if (!TYPES[r.type] || !ids[r.sector] || !isDate_(r.from) || !isDate_(r.to)) { bad++; return; }
+      seen[ref] = 1;
+      var at = /^\d{4}-\d{2}-\d{2}T/.test(r.createdAt || '') ? r.createdAt : r.from + 'T07:00:00.000Z';
+      var o = { id: Utilities.getUuid().slice(0, 8), createdAt: at, updatedAt: at, createdBy: user.username, createdByName: 'استيراد · ' + by,
+        type: r.type, refNo: ref, sector: r.sector, unit: clean_(r.unit, 120), party: clean_(r.party, 150), from: r.from, to: r.to,
+        description: clean_(r.description, 1500), notes: clean_(r.notes, 500), people: '[]', vehicles: '[]', status: 'active' };
+      out.push(h.map(function (k) { return out_(o[k]); }));
+    });
+    if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, h.length).setValues(out);
+    return { added: out.length, skipped: skipped, bad: bad };
+  });
 }
 
 // ===== الحسابات والقطاعات (للمدير) =====

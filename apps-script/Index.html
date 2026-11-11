@@ -223,6 +223,12 @@
         <p class="muted">الكلمات المفتاحية بيستخدمها البرنامج عشان يعرف القطاع لوحده من المستند (مثلًا: celia, سيليا). افصل بينهم بفاصلة.</p>
         <div id="sectors"></div>
       </div>
+      <div class="box">
+        <b>استيراد داتا قديمة</b>
+        <p class="muted">ارفع ملف الاستيراد الجاهز (‎.json). اللي اتسجل قبل كده مش هيتكرر، فلو الرفع وقف في النص ارفعه تاني عادي.</p>
+        <input type="file" id="impFile" accept=".json,application/json">
+        <div class="status" id="impSt"></div>
+      </div>
     </section>
   </main>
 </div>
@@ -771,13 +777,13 @@
     var secCount = {};
     inP.forEach(function(d){ secCount[d.sector] = (secCount[d.sector] || 0) + 1; });
     var bySec = Object.keys(secCount).map(function(k){ return [secName(k), secCount[k]]; }).sort(function(a, b){ return b[1] - a[1]; });
-    if (bySec.length > 12) { var rest = bySec.slice(11).reduce(function(s, r){ return s + r[1]; }, 0); bySec = bySec.slice(0, 11).concat([['باقي القطاعات (' + (bySec.length - 11) + ')', rest]]); }
+    
     h += '<div class="charts"><div class="box"><div class="ch-t">حسب النوع</div><div class="ch-s">في الفترة</div>' + (byType.length ? hbars(byType, inP.length) : '<p class="muted">—</p>') + '</div>' +
       '<div class="box"><div class="ch-t">حسب القطاع</div><div class="ch-s">في الفترة</div>' + (bySec.length ? hbars(bySec, inP.length) : '<p class="muted">—</p>') + '</div></div>';
 
     // المشرفين
     var supRows = rep.supervisors.map(function(s){
-      var mine = inP.filter(function(d){ return d.status !== 'cancelled' && supsFor(d).some(function(x){ return x.username === s.username; }); });
+      var mine = inP.filter(function(d){ return d.status !== 'cancelled' && !d.imp && supsFor(d).some(function(x){ return x.username === s.username; }); });
       var done = 0, hrs = [];
       mine.forEach(function(d){
         var a = d.acks.filter(function(x){ return x.u === s.username && x.at >= d.updatedAt; }).sort(function(p, q){ return p.at < q.at ? -1 : 1; })[0];
@@ -787,7 +793,7 @@
       return [s.name, mine.length, done, mine.length - done, avg];
     }).sort(function(a, b){ return b[3] - a[3]; });
     function dur(hh){ if (hh == null) return '—'; if (hh < 1) return Math.max(1, Math.round(hh * 60)) + ' دقيقة'; if (hh < 48) return Math.round(hh) + ' ساعة'; return Math.round(hh / 24) + ' يوم'; }
-    h += '<div class="box" style="margin-top:12px"><div class="ch-t">اطّلاع المشرفين</div><div class="ch-s">المستندات اللي وصلت كل مشرف في الفترة</div>' +
+    h += '<div class="box" style="margin-top:12px"><div class="ch-t">اطّلاع المشرفين</div><div class="ch-s">المستندات اللي وصلت كل مشرف في الفترة (من غير الداتا القديمة المستوردة)</div>' +
       (supRows.length ? '<table><tr><th>المشرف</th><th>وصله</th><th>اطّلع</th><th>لسه</th><th>متوسط وقت الاطلاع</th></tr>' + supRows.map(function(r){
         return '<tr><td>' + esc(r[0]) + '</td><td class="num">' + r[1] + '</td><td class="num">' + r[2] + '</td><td class="num"' + (r[3] ? ' style="color:var(--warn);font-weight:700"' : '') + '>' + r[3] + '</td><td>' + dur(r[4]) + '</td></tr>';
       }).join('') + '</table>' : '<p class="muted">مفيش حسابات مشرفين لسه.</p>') + '</div>';
@@ -852,6 +858,29 @@
     $('#sectors').querySelectorAll('[data-s]').forEach(function(b){ b.onclick = function(){ sectorForm(cfg.sectors[b.dataset.s]); }; });
   }
   $('#newSector').onclick = function(){ sectorForm(null); };
+  $('#impFile').onchange = function(){
+    var f = this.files[0], st = $('#impSt'), inp = this; if (!f) return;
+    var r = new FileReader();
+    r.onload = function(){
+      var data; try { data = JSON.parse(r.result); } catch(e){ st.className = 'status warn'; st.textContent = '⚠️ الملف ده مش ملف استيراد.'; return; }
+      var rows = Array.isArray(data) ? data : (data.rows || []), src = data.source || f.name, i = 0, tot = { added: 0, skipped: 0, bad: 0 };
+      if (!rows.length) { st.className = 'status warn'; st.textContent = '⚠️ الملف فاضي.'; return; }
+      inp.disabled = true;
+      (function next(){
+        if (i >= rows.length) {
+          inp.disabled = false; inp.value = ''; st.className = 'status ok';
+          st.textContent = '✓ خلص: اتضاف ' + tot.added + (tot.skipped ? ' · كان متسجل قبل كده ' + tot.skipped : '') + (tot.bad ? ' · ناقص بيانات ' + tot.bad : '');
+          call('resume', token).then(function(x){ cfg = x.config; buildSelects(); renderSectors(); refresh(); });
+          return;
+        }
+        st.className = 'status'; st.textContent = '⏳ بيستورد ' + Math.min(i + 400, rows.length) + ' من ' + rows.length + '...';
+        call('importDocs', token, rows.slice(i, i + 400), src).then(function(x){
+          tot.added += x.added; tot.skipped += x.skipped; tot.bad += x.bad; i += 400; next();
+        }).catch(function(e){ inp.disabled = false; inp.value = ''; st.className = 'status warn'; st.textContent = '⚠️ وقف عند ' + i + ': ' + e.message + ' — ارفع الملف تاني يكمّل.'; });
+      })();
+    };
+    r.readAsText(f);
+  };
   function sectorForm(s){
     s = s || { kind: 'سكني' };
     dialog('<b>' + (s.id ? 'تعديل ' + esc(s.name) : 'قطاع / مكان جديد') + '</b><div class="grid" style="margin-top:10px">' +
