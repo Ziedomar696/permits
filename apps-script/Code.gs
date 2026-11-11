@@ -30,7 +30,7 @@ var TYPES = {
   other: 'أخرى'
 };
 
-var ROLES = { admin: 'مدير النظام', entry: 'إدخال بيانات', supervisor: 'مشرف قطاع' };
+var ROLES = { admin: 'مدير النظام', entry: 'إدخال بيانات', supervisor: 'مشرف قطاع', emaar: 'مشرف أمن إعمار' };
 
 var DEFAULT_SECTORS = [
   ['1', 'Arezzo', 'سكني', 'arezzo, اريزو'],
@@ -346,6 +346,23 @@ function ackDoc(token, id) {
     append_('Acks', { docId: id, username: user.username, name: user.name, at: now_() });
     return true;
   });
+}
+
+// ===== التقارير =====
+function reportData(token) {
+  var user = session_(token);
+  need_(user, ['admin', 'entry', 'emaar']);
+  var acks = {};
+  rows_('Acks').forEach(function (a) { (acks[a.docId] = acks[a.docId] || []).push({ u: a.username, at: a.at }); });
+  return {
+    today: today_(),
+    docs: rows_('Docs').map(function (d) {
+      return { id: d.id, type: d.type, sector: d.sector, from: d.from, to: d.to, status: d.status, unit: d.unit, party: d.party,
+        title: d.title || d.description, createdAt: d.createdAt, updatedAt: d.updatedAt || d.createdAt,
+        people: parseJson_(d.people).length, acks: acks[d.id] || [] };
+    }),
+    supervisors: rows_('Users').filter(function (u) { return u.role === 'supervisor' && u.active === 'yes'; }).map(userObj_)
+  };
 }
 
 // ===== الملفات والقراءة التلقائية =====

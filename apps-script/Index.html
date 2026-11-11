@@ -85,6 +85,30 @@
   .secs{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:4px;margin-top:6px}
   .secs label{display:flex;gap:6px;align-items:center;color:var(--ink);font-weight:400}
   .secs input{width:auto;margin:0}
+  .rep-f{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+  .tile{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .tile .n{font-size:26px;font-weight:700;line-height:1.2}
+  .tile .l{font-size:12.5px;color:var(--mute);font-weight:600}
+  .tile.warn .n{color:var(--warn)}
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:760px){.charts{grid-template-columns:1fr}}
+  .charts .box{margin:0}
+  .ch-t{font-weight:700;margin-bottom:2px}
+  .ch-s{font-size:12px;color:var(--mute);margin-bottom:8px}
+  .hb{display:grid;grid-template-columns:minmax(90px,38%) 1fr auto;gap:6px 8px;align-items:center;font-size:13px}
+  .hb .bar{height:14px;background:#2a78d6;border-radius:0 4px 4px 0;min-width:2px}
+  .hb .track{background:transparent}
+  .hb .v{font-weight:700;font-variant-numeric:tabular-nums;min-width:24px;text-align:end}
+  .hb .row:hover{background:var(--grayb)}
+  .tip{position:fixed;pointer-events:none;background:#1d2a30;color:#fff;font-size:12.5px;padding:5px 9px;border-radius:7px;z-index:40;white-space:nowrap}
+  .colwrap svg{width:100%;height:auto;display:block}
+  .colwrap .gl{stroke:#e6ebed}
+  .colwrap .ax{fill:var(--mute);font-size:11px}
+  .colwrap rect.c{fill:#2a78d6}
+  .colwrap rect.hit{fill:transparent;cursor:default}
+  .colwrap g.on rect.c{fill:#1c5cab}
+  .num{font-variant-numeric:tabular-nums}
   .banner{background:#fff4d6;border:1px solid #f2d48a;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-weight:600;cursor:pointer}
 </style>
 </head>
@@ -171,6 +195,19 @@
           <button class="btn ghost hide" id="cancelEdit">إلغاء التعديل</button>
         </div>
       </div>
+    </section>
+
+    <section id="v-reports" class="hide">
+      <div class="rep-f">
+        <label>الفترة (حسب تاريخ البداية)<select id="rP">
+          <option value="month">الشهر ده</option><option value="30">آخر ٣٠ يوم</option><option value="90">آخر ٣ شهور</option>
+          <option value="year">السنة دي</option><option value="all">الكل</option><option value="custom">فترة مخصصة</option></select></label>
+        <label class="rC hide">من<input type="date" id="rFrom"></label>
+        <label class="rC hide">إلى<input type="date" id="rTo"></label>
+        <label>النوع<select id="rType"></select></label>
+        <label>القطاع<select id="rSec"></select></label>
+      </div>
+      <div id="rep"><p class="muted">بيحمّل...</p></div>
     </section>
 
     <section id="v-users" class="hide">
@@ -260,6 +297,8 @@
     });
   }
 
+  function canEdit(){ return user && (user.role === 'admin' || user.role === 'entry'); }
+
   // ===== الدخول =====
   function showLogin(){
     $('#app').classList.add('hide'); $('#login').classList.remove('hide');
@@ -304,7 +343,8 @@
   // ===== التنقل =====
   function buildNav(){
     var items = [['list', 'التصاريح']];
-    if (user.role !== 'supervisor') items.push(['add', '+ إضافة']);
+    if (canEdit()) items.push(['add', '+ إضافة']);
+    if (user.role !== 'supervisor') items.push(['reports', 'التقارير']);
     if (user.role === 'admin') items.push(['users', 'الحسابات'], ['sectors', 'القطاعات']);
     $('#nav').innerHTML = items.map(function(i){ return '<button data-v="' + i[0] + '">' + i[1] + '</button>'; }).join('');
     $('#nav').classList.toggle('hide', items.length < 2);
@@ -312,10 +352,11 @@
   }
   function go(v){
     view = v;
-    ['list', 'add', 'users', 'sectors'].forEach(function(x){ $('#v-' + x).classList.toggle('hide', x !== v); });
+    ['list', 'add', 'reports', 'users', 'sectors'].forEach(function(x){ $('#v-' + x).classList.toggle('hide', x !== v); });
     $('#nav').querySelectorAll('button').forEach(function(b){ b.classList.toggle('on', b.dataset.v === v); });
     if (v === 'users') loadUsers();
     if (v === 'sectors') renderSectors();
+    if (v === 'reports') loadReport();
     window.scrollTo(0, 0);
   }
 
@@ -418,7 +459,7 @@
       '<button class="btn ghost sm" data-a="det" data-id="' + d.id + '">التفاصيل</button>';
     if (user.role === 'supervisor' && !d.acked && d.status !== 'cancelled') h += '<button class="btn okb sm" data-a="ack" data-id="' + d.id + '">✓ تم الاطلاع</button>';
     if (user.role === 'supervisor' && d.acked) h += '<span class="muted" style="align-self:center">✓ اطّلعت عليه</span>';
-    if (user.role !== 'supervisor' && d.status !== 'cancelled') h += '<button class="btn ghost sm" data-a="edit" data-id="' + d.id + '">تعديل</button><button class="btn red sm" data-a="cancel" data-id="' + d.id + '">إلغاء</button>';
+    if (canEdit() && d.status !== 'cancelled') h += '<button class="btn ghost sm" data-a="edit" data-id="' + d.id + '">تعديل</button><button class="btn red sm" data-a="cancel" data-id="' + d.id + '">إلغاء</button>';
     h += '</div>';
     if (user.role !== 'supervisor' && d.status !== 'cancelled') {
       var a = (d.acks || []).map(function(x){ return esc(x.name); }), p = (d.pending || []).map(esc);
@@ -633,6 +674,136 @@
     }).then(function(){ b.disabled = false; });
   }
 
+  // ===== التقارير =====
+  var rep = null, tipEl = null;
+  function tip(e, html){
+    if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'tip'; document.body.appendChild(tipEl); }
+    if (!html) { tipEl.style.display = 'none'; return; }
+    tipEl.innerHTML = html; tipEl.style.display = 'block';
+    var x = Math.min(e.clientX + 12, window.innerWidth - tipEl.offsetWidth - 6), y = e.clientY - tipEl.offsetHeight - 10;
+    tipEl.style.left = Math.max(6, x) + 'px'; tipEl.style.top = (y < 6 ? e.clientY + 16 : y) + 'px';
+  }
+  function loadReport(){
+    $('#rType').innerHTML = '<option value="">كل الأنواع</option>' + Object.keys(cfg.types).map(function(k){ return '<option value="' + k + '">' + esc(cfg.types[k]) + '</option>'; }).join('');
+    $('#rSec').innerHTML = '<option value="">كل القطاعات</option>' + sectorOptions(false);
+    $('#rep').innerHTML = '<p class="muted">بيحمّل...</p>';
+    call('reportData', token).then(function(r){ rep = r; renderReport(); }).catch(function(e){ $('#rep').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; });
+  }
+  ['#rP', '#rFrom', '#rTo', '#rType', '#rSec'].forEach(function(s){ $(s).addEventListener('input', function(){
+    document.querySelectorAll('.rC').forEach(function(l){ l.classList.toggle('hide', $('#rP').value !== 'custom'); });
+    if (rep) renderReport();
+  }); });
+  function addDays(ymd, n){ var d = new Date(ymd + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+  function period(){
+    var t = rep.today, p = $('#rP').value;
+    if (p === 'month') return [t.slice(0, 8) + '01', t];
+    if (p === '30') return [addDays(t, -29), t];
+    if (p === '90') return [addDays(t, -89), t];
+    if (p === 'year') return [t.slice(0, 4) + '-01-01', t];
+    if (p === 'custom') return [$('#rFrom').value || '0000-01-01', $('#rTo').value || '9999-12-31'];
+    return ['0000-01-01', '9999-12-31'];
+  }
+  function hbars(rows, total){
+    var max = Math.max.apply(null, rows.map(function(r){ return r[1]; }).concat([1]));
+    return '<div class="hb">' + rows.map(function(r){
+      var pct = total ? Math.round(r[1] * 100 / total) : 0;
+      return '<div title="">' + esc(r[0]) + '</div><div class="track"><div class="bar" data-tip="' + esc(r[0]) + ': ' + r[1] + ' (' + pct + '٪)" style="width:' + (r[1] * 100 / max) + '%"></div></div><div class="v">' + r[1] + '</div>';
+    }).join('') + '</div>';
+  }
+  function columns(buckets){
+    var W = 640, H = 200, pl = 30, pr = 8, pt = 10, pb = 26, n = buckets.length;
+    var max = Math.max.apply(null, buckets.map(function(b){ return b[1]; }).concat([1]));
+    var step = max <= 5 ? 1 : Math.ceil(max / 4 / (max > 50 ? 10 : 1)) * (max > 50 ? 10 : 1), top = Math.ceil(max / step) * step;
+    var bw = (W - pl - pr) / n, y = function(v){ return pt + (H - pt - pb) * (1 - v / top); };
+    var g = '';
+    for (var v = 0; v <= top; v += step) g += '<line class="gl" x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text class="ax" x="' + (pl - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + '</text>';
+    var every = Math.ceil(n / 8);
+    buckets.forEach(function(b, i){
+      var x = pl + i * bw, w = Math.max(2, Math.min(28, bw - 2)), cx = x + bw / 2, h = H - pb - y(b[1]);
+      var r = Math.min(4, w / 2, h);
+      var path = b[1] ? 'M' + (cx - w/2) + ',' + (H - pb) + 'V' + (y(b[1]) + r) + 'Q' + (cx - w/2) + ',' + y(b[1]) + ' ' + (cx - w/2 + r) + ',' + y(b[1]) + 'H' + (cx + w/2 - r) + 'Q' + (cx + w/2) + ',' + y(b[1]) + ' ' + (cx + w/2) + ',' + (y(b[1]) + r) + 'V' + (H - pb) + 'Z' : '';
+      g += '<g data-tip="' + esc(b[2]) + ': ' + b[1] + '">' + (path ? '<path d="' + path + '" fill="#2a78d6" class="cp"/>' : '') +
+        '<rect class="hit" x="' + x + '" y="' + pt + '" width="' + bw + '" height="' + (H - pt - pb) + '"/></g>';
+      if (i % every === 0) g += '<text class="ax" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(b[0]) + '</text>';
+    });
+    return '<div class="colwrap"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img">' + g + '</svg></div>';
+  }
+  var MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  function renderReport(){
+    var pr = period(), ft = $('#rType').value, fs = $('#rSec').value, t = rep.today;
+    var all = rep.docs.filter(function(d){ return (!ft || d.type === ft) && (!fs || String(d.sector) === fs); });
+    var inP = all.filter(function(d){ return d.from >= pr[0] && d.from <= pr[1]; });
+    var live = all.filter(function(d){ return d.status !== 'cancelled'; });
+    var activeNow = live.filter(function(d){ return d.from <= t && d.to >= t; });
+    var soon = activeNow.filter(function(d){ return d.to <= addDays(t, 3); }).sort(function(a, b){ return a.to < b.to ? -1 : 1; });
+    function supsFor(d){ return rep.supervisors.filter(function(s){ return s.sectors.indexOf('*') >= 0 || s.sectors.indexOf(String(d.sector)) >= 0; }); }
+    function ackedBy(d, u){ return d.acks.some(function(a){ return a.u === u && a.at >= d.updatedAt; }); }
+    var pendingDocs = live.filter(function(d){ return d.to >= t && supsFor(d).some(function(s){ return !ackedBy(d, s.username); }); });
+    var cancelled = inP.filter(function(d){ return d.status === 'cancelled'; }).length;
+
+    var h = '<div class="tiles">' +
+      '<div class="tile"><div class="n num">' + inP.length + '</div><div class="l">مستندات في الفترة</div></div>' +
+      '<div class="tile"><div class="n num">' + activeNow.length + '</div><div class="l">ساري النهارده</div></div>' +
+      '<div class="tile' + (soon.length ? ' warn' : '') + '"><div class="n num">' + soon.length + '</div><div class="l">⏰ بينتهي خلال ٣ أيام</div></div>' +
+      '<div class="tile' + (pendingDocs.length ? ' warn' : '') + '"><div class="n num">' + pendingDocs.length + '</div><div class="l">⏳ لسه مشرفين ماطّلعوش</div></div>' +
+      '<div class="tile"><div class="n num">' + cancelled + '</div><div class="l">اتلغى في الفترة</div></div></div>';
+
+    // على مدار الوقت
+    var buckets = [];
+    var lo = pr[0] === '0000-01-01' ? (inP.map(function(d){ return d.from; }).sort()[0] || t) : pr[0];
+    var hi = pr[1] === '9999-12-31' ? t : pr[1];
+    if (hi < lo) hi = lo;
+    var spanDays = Math.round((Date.parse(hi) - Date.parse(lo)) / 864e5) + 1;
+    if (spanDays <= 62) {
+      for (var dd = lo; dd <= hi; dd = addDays(dd, 1)) buckets.push([dd.slice(8) + '/' + dd.slice(5, 7), inP.filter(function(d){ return d.from === dd; }).length, fmtD(dd)]);
+    } else {
+      var m = lo.slice(0, 7);
+      while (m <= hi.slice(0, 7)) {
+        var mm = m;
+        buckets.push([MONTHS[+mm.slice(5) - 1].slice(0, 3) + ' ' + mm.slice(2, 4), inP.filter(function(d){ return d.from.slice(0, 7) === mm; }).length, MONTHS[+mm.slice(5) - 1] + ' ' + mm.slice(0, 4)]);
+        var y = +m.slice(0, 4), mo = +m.slice(5) + 1; if (mo > 12) { mo = 1; y++; } m = y + '-' + (mo < 10 ? '0' : '') + mo;
+      }
+    }
+    h += '<div class="box"><div class="ch-t">عدد المستندات حسب تاريخ البداية</div><div class="ch-s">' + (spanDays <= 62 ? 'لكل يوم' : 'لكل شهر') + ' · من ' + fmtD(lo) + ' إلى ' + fmtD(hi) + '</div>' + (inP.length ? columns(buckets) : '<p class="muted">مفيش مستندات في الفترة دي.</p>') + '</div>';
+
+    // حسب النوع والقطاع
+    var byType = Object.keys(cfg.types).map(function(k){ return [cfg.types[k], inP.filter(function(d){ return d.type === k; }).length]; }).filter(function(r){ return r[1]; }).sort(function(a, b){ return b[1] - a[1]; });
+    var secCount = {};
+    inP.forEach(function(d){ secCount[d.sector] = (secCount[d.sector] || 0) + 1; });
+    var bySec = Object.keys(secCount).map(function(k){ return [secName(k), secCount[k]]; }).sort(function(a, b){ return b[1] - a[1]; });
+    if (bySec.length > 12) { var rest = bySec.slice(11).reduce(function(s, r){ return s + r[1]; }, 0); bySec = bySec.slice(0, 11).concat([['باقي القطاعات (' + (bySec.length - 11) + ')', rest]]); }
+    h += '<div class="charts"><div class="box"><div class="ch-t">حسب النوع</div><div class="ch-s">في الفترة</div>' + (byType.length ? hbars(byType, inP.length) : '<p class="muted">—</p>') + '</div>' +
+      '<div class="box"><div class="ch-t">حسب القطاع</div><div class="ch-s">في الفترة</div>' + (bySec.length ? hbars(bySec, inP.length) : '<p class="muted">—</p>') + '</div></div>';
+
+    // المشرفين
+    var supRows = rep.supervisors.map(function(s){
+      var mine = inP.filter(function(d){ return d.status !== 'cancelled' && supsFor(d).some(function(x){ return x.username === s.username; }); });
+      var done = 0, hrs = [];
+      mine.forEach(function(d){
+        var a = d.acks.filter(function(x){ return x.u === s.username && x.at >= d.updatedAt; }).sort(function(p, q){ return p.at < q.at ? -1 : 1; })[0];
+        if (a) { done++; hrs.push((Date.parse(a.at) - Date.parse(d.updatedAt)) / 36e5); }
+      });
+      var avg = hrs.length ? hrs.reduce(function(p, q){ return p + q; }, 0) / hrs.length : null;
+      return [s.name, mine.length, done, mine.length - done, avg];
+    }).sort(function(a, b){ return b[3] - a[3]; });
+    function dur(hh){ if (hh == null) return '—'; if (hh < 1) return Math.max(1, Math.round(hh * 60)) + ' دقيقة'; if (hh < 48) return Math.round(hh) + ' ساعة'; return Math.round(hh / 24) + ' يوم'; }
+    h += '<div class="box" style="margin-top:12px"><div class="ch-t">اطّلاع المشرفين</div><div class="ch-s">المستندات اللي وصلت كل مشرف في الفترة</div>' +
+      (supRows.length ? '<table><tr><th>المشرف</th><th>وصله</th><th>اطّلع</th><th>لسه</th><th>متوسط وقت الاطلاع</th></tr>' + supRows.map(function(r){
+        return '<tr><td>' + esc(r[0]) + '</td><td class="num">' + r[1] + '</td><td class="num">' + r[2] + '</td><td class="num"' + (r[3] ? ' style="color:var(--warn);font-weight:700"' : '') + '>' + r[3] + '</td><td>' + dur(r[4]) + '</td></tr>';
+      }).join('') + '</table>' : '<p class="muted">مفيش حسابات مشرفين لسه.</p>') + '</div>';
+
+    // بينتهي قريب
+    h += '<div class="box"><div class="ch-t">⏰ بينتهي خلال ٣ أيام</div>' + (soon.length ? '<table><tr><th>النوع</th><th>القطاع</th><th>الوحدة / الاسم</th><th>ينتهي</th></tr>' + soon.map(function(d){
+      return '<tr><td>' + esc(cfg.types[d.type]) + '</td><td>' + esc(secName(d.sector)) + '</td><td>' + esc([d.unit, d.party].filter(String).join(' · ')) + '</td><td>' + fmtD(d.to) + (d.to === t ? ' (النهارده)' : '') + '</td></tr>';
+    }).join('') + '</table>' : '<p class="muted">مفيش حاجة بتنتهي قريب.</p>') + '</div>';
+
+    $('#rep').innerHTML = h;
+    $('#rep').querySelectorAll('[data-tip]').forEach(function(el){
+      el.addEventListener('mousemove', function(e){ el.classList.add('on'); var p = el.querySelector('.cp'); if (p) p.setAttribute('fill', '#1c5cab'); tip(e, esc(el.dataset.tip)); });
+      el.addEventListener('mouseleave', function(){ var p = el.querySelector('.cp'); if (p) p.setAttribute('fill', '#2a78d6'); tip(null); });
+    });
+  }
+
   // ===== الحسابات =====
   var users = [];
   function loadUsers(){
@@ -660,7 +831,8 @@
       '<div class="err" id="uerr"></div><div class="row"><button class="btn" id="uok">حفظ</button><button class="btn ghost" id="uno">رجوع</button></div>');
     var HINT = { admin: 'كل حاجة: إضافة وتعديل وإلغاء المستندات، والحسابات والقطاعات.',
       entry: 'بيضيف ويعدّل ويلغي المستندات، وبيشوف كل القطاعات. مالوش دعوة بالحسابات والقطاعات.',
-      supervisor: 'بيشوف المستندات بتاعة قطاعاته بس، وبيدوس «تم الاطلاع». مايقدرش يضيف أو يعدّل.' };
+      supervisor: 'بيشوف المستندات بتاعة قطاعاته بس، وبيدوس «تم الاطلاع». مايقدرش يضيف أو يعدّل.',
+      emaar: 'بيشوف كل التصاريح والتفويضات في كل القطاعات، ومين من المشرفين اطّلع، والتقارير. مايقدرش يضيف أو يعدّل أو يلغي.' };
     var tog = function(){ $('#usecs').classList.toggle('hide', $('#ur').value !== 'supervisor'); $('#rhint').textContent = HINT[$('#ur').value] || ''; };
     $('#ur').onchange = tog; tog();
     $('#uno').onclick = closeDialog;
