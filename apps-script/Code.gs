@@ -53,6 +53,7 @@ var DEFAULT_SECTORS = [
   ['18', 'Marina Residences', 'سكني', 'marina residences, marina res'],
   ['19', 'Marina 2 & Marina West', 'سكني', 'marina 2, marina west'],
   ['20', 'Marina Front & Views', 'سكني', 'marina front, marina views'],
+  ['m1', 'Marina', 'سكني', 'marina, marina 1, المارينا'],
   ['c1', 'Marina (تجاري)', 'تجاري', 'marina, المارينا'],
   ['c2', 'Promenade / Vida', 'تجاري', 'promenade, vida, بروميناد']
 ];
@@ -68,13 +69,29 @@ function doGet() {
 
 function ensure_() {
   var p = PropertiesService.getScriptProperties();
-  if (p.getProperty('READY') === '2') return;
+  if (p.getProperty('READY') === '3') return;
   Object.keys(SCHEMA).forEach(function (n) { sheet_(n); });
-  if (!rows_('Sectors').length) DEFAULT_SECTORS.forEach(function (s) {
-    append_('Sectors', { id: s[0], name: s[1], kind: s[2], keywords: s[3] });
+  var have = rows_('Sectors');
+  DEFAULT_SECTORS.forEach(function (s) {   // أول مرة كلهم، وبعد كده اللي اتضاف جديد بس (زي Marina)
+    if (!have.some(function (h) { return h.id === s[0]; })) append_('Sectors', { id: s[0], name: s[1], kind: s[2], keywords: s[3] });
   });
+  moveMarina_();
   secret_();
-  p.setProperty('READY', '2');
+  p.setProperty('READY', '3');
+}
+
+// الداتا المستوردة اللي مكانها «Marina» بس كانت في «أماكن عامة / غير محدد»: تتنقل لقطاع Marina
+function moveMarina_() {
+  var sh = sheet_('Docs'), last = sh.getLastRow();
+  if (last < 2) return;
+  var h = header_(sh), iS = h.indexOf('sector'), iU = h.indexOf('unit');
+  var sec = sh.getRange(2, iS + 1, last - 1, 1).getValues(), unit = sh.getRange(2, iU + 1, last - 1, 1).getValues(), n = 0;
+  for (var r = 0; r < sec.length; r++) {
+    if (cell_(sec[r][0]) !== 'x1') continue;
+    var m = cell_(unit[r][0]).match(/^marina(?:\s+(?:1|r1|r2|s1|s2))?(?:\s*·\s*(.*))?$/i);
+    if (m) { sec[r][0] = 'm1'; unit[r][0] = out_(m[1] || ''); n++; } else unit[r][0] = out_(cell_(unit[r][0]));
+  }
+  if (n) { sh.getRange(2, iS + 1, sec.length, 1).setValues(sec); sh.getRange(2, iU + 1, unit.length, 1).setValues(unit); }
 }
 
 /** اختياري من المحرر: بيجهّز الشيت ويطبع رابطه. */

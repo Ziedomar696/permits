@@ -939,7 +939,7 @@
     'lea':'7','faya':'7','lea & faya':'7','faya - lea':'7','faya & lea':'7','skaia':'8','altea':'8','riva views':'9','riva view':'9','riva':'10','salerno':'10','riva salerno':'10',
     'blanca':'11','valencia':'12','vectoria':'13','victoria':'13','verdi':'14','marassi bay':'15',
     'safi':'16','safi 1':'16','safi 2':'16','safi sands':'16','safi sands 1':'16','safi sands 2':'16','safi sands 2 - 1':'16','safi 1 - 2':'16',
-    'celia':'17','marina residences':'18','marina 2':'19','marina west':'19','marina front':'20','marina views':'20','marina promenade':'c2','vida hotel':'c2' };
+    'celia':'17','marina':'m1','marina 1':'m1','marina r1':'m1','marina r2':'m1','marina s1':'m1','marina s2':'m1','marina residences':'18','marina 2':'19','marina west':'19','marina front':'20','marina views':'20','marina promenade':'c2','vida hotel':'c2' };
   function impSector(loc){
     var k = String(loc || '').toLowerCase().replace(/\s+/g, ' ').trim(), id = IMP_MAP[k];
     if (!id) { var s = cfg.sectors.filter(function(x){ return String(x.name).toLowerCase().trim() === k; })[0]; if (s) id = String(s.id); }
