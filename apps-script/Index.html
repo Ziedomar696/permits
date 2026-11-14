@@ -225,9 +225,10 @@
       </div>
       <div class="box">
         <b>استيراد داتا قديمة</b>
-        <p class="muted">ارفع ملف الاستيراد الجاهز (‎.json). اللي اتسجل قبل كده مش هيتكرر، فلو الرفع وقف في النص ارفعه تاني عادي.</p>
-        <input type="file" id="impFile" accept=".json,application/json">
+        <p class="muted">ارفع شيت Excel القديم زي ما هو: شيت التصاريح (WPT) أو شيت التفويضات (MSA Delegation). البرنامج بيقرا الأعمدة لوحده، ويوريك هيضيف إيه قبل ما يبدأ. اللي اتسجل قبل كده مش هيتكرر.</p>
+        <input type="file" id="impFile" accept=".xlsx,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
         <div class="status" id="impSt"></div>
+        <button class="btn hide" id="impGo" style="margin-top:10px">ابدأ الاستيراد</button>
       </div>
     </section>
   </main>
@@ -399,6 +400,15 @@
     }).catch(function(e){ if (!/الجلسة/.test(e.message)) toast(e.message); });
   }
   ['#q', '#fSec', '#fType'].forEach(function(s){ $(s).addEventListener('input', renderList); });
+  // البحث بيدوّر كمان في الداتا القديمة على السيرفر
+  var found = [], foundQ = '', qT = null;
+  $('#q').addEventListener('input', function(){
+    clearTimeout(qT); var q = this.value.trim();
+    if (q.length < 3) { found = []; foundQ = ''; return; }
+    qT = setTimeout(function(){
+      call('listDocs', token, { q: q }).then(function(r){ if ($('#q').value.trim() !== q) return; found = r.docs; foundQ = q; renderList(); }).catch(function(){});
+    }, 450);
+  });
   // فلتر النوع = تصريح محلات → فلتر القطاع يعرض الأماكن التجارية بس
   $('#fType').addEventListener('input', function(){
     var sel = $('#fSec'), cur = sel.value, kind = this.value === 'retail' ? 'تجاري' : '';
@@ -429,7 +439,9 @@
     else nb.classList.add('hide');
 
     var q = $('#q').value.trim(), fs = $('#fSec').value, ft = $('#fType').value;
-    var list = docs.filter(function(d){
+    var pool = docs;
+    if (q && foundQ && q.indexOf(foundQ) === 0) { var have = {}; docs.forEach(function(d){ have[d.id] = 1; }); pool = docs.concat(found.filter(function(d){ return !have[d.id]; })); }
+    var list = pool.filter(function(d){
       var s = status(d)[0];
       if (!q) {
         if (chip === 'active' && s !== 'on') return false;
@@ -475,7 +487,7 @@
     return h + '</div>';
   }
 
-  function byId(id){ return docs.filter(function(d){ return d.id === id; })[0]; }
+  function byId(id){ return docs.concat(found).filter(function(d){ return d.id === id; })[0]; }
   function act(a, id, btn){
     var d = byId(id); if (!d) return;
     if (a === 'det') {
@@ -858,28 +870,193 @@
     $('#sectors').querySelectorAll('[data-s]').forEach(function(b){ b.onclick = function(){ sectorForm(cfg.sectors[b.dataset.s]); }; });
   }
   $('#newSector').onclick = function(){ sectorForm(null); };
+  // ===== استيراد شيتات Excel القديمة (تصاريح WPT والتفويضات) =====
+  // قارئ xlsx صغير من غير مكتبات: بيفك الـ zip ويقرا الـ XML
+  function unzip(buf){
+    var dv = new DataView(buf), u8 = new Uint8Array(buf), eocd = -1;
+    for (var i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('الملف ده مش Excel (xlsx).');
+    var n = dv.getUint16(eocd + 10, true), p = dv.getUint32(eocd + 16, true), files = {}, dec = new TextDecoder();
+    for (var k = 0; k < n; k++) {
+      var method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true),
+        xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+      var name = dec.decode(u8.subarray(p + 46, p + 46 + nl));
+      files[name] = { method: method, off: off, csize: csize };
+      p += 46 + nl + xl + cl;
+    }
+    return function read(name){
+      var f = files[name]; if (!f) return Promise.resolve(null);
+      var ln = dv.getUint16(f.off + 26, true), lx = dv.getUint16(f.off + 28, true), data = u8.slice(f.off + 30 + ln + lx, f.off + 30 + ln + lx + f.csize);
+      if (f.method === 0) return Promise.resolve(dec.decode(data));
+      if (typeof DecompressionStream === 'undefined') return Promise.reject(new Error('المتصفح ده قديم ومش بيفتح ملفات Excel. جرّب من كروم على الكمبيوتر.'));
+      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+    };
+  }
+  function xmlDoc(s){ return new DOMParser().parseFromString(s, 'application/xml'); }
+  function kids(el, tag){ return Array.prototype.filter.call(el.childNodes, function(c){ return c.nodeType === 1 && (c.localName || c.nodeName.split(':').pop()) === tag; }); }
+  function readXlsx(buf){
+    var read = unzip(buf), out = [];
+    return Promise.all([read('xl/workbook.xml'), read('xl/_rels/workbook.xml.rels'), read('xl/sharedStrings.xml')]).then(function(r){
+      if (!r[0]) throw new Error('الملف ده مش Excel (xlsx).');
+      var rels = {}, shared = [];
+      Array.prototype.forEach.call(xmlDoc(r[1] || '<x/>').getElementsByTagName('Relationship'), function(x){
+        var t = x.getAttribute('Target'); rels[x.getAttribute('Id')] = t.charAt(0) === '/' ? t.slice(1) : 'xl/' + t.replace(/^\.\//, '');
+      });
+      if (r[2]) Array.prototype.forEach.call(xmlDoc(r[2]).documentElement.childNodes, function(si){
+        if (si.nodeType !== 1) return;
+        var txt = ''; (function walk(e){ Array.prototype.forEach.call(e.childNodes, function(c){
+          if (c.nodeType !== 1) return; var ln = c.localName; if (ln === 'rPh') return; if (ln === 't') txt += c.textContent; else walk(c); }); })(si);
+        shared.push(txt);
+      });
+      var sheets = Array.prototype.map.call(xmlDoc(r[0]).getElementsByTagName('sheet'), function(s){
+        return { name: s.getAttribute('name'), path: rels[s.getAttribute('r:id') || s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')] };
+      });
+      return sheets.reduce(function(chain, sh){
+        return chain.then(function(){ return read(sh.path); }).then(function(x){
+          if (!x) return;
+          var rows = [];
+          Array.prototype.forEach.call(xmlDoc(x).getElementsByTagName('row'), function(row){
+            var cells = [];
+            kids(row, 'c').forEach(function(c){
+              var ref = c.getAttribute('r') || '', col = 0, m = ref.match(/^[A-Z]+/);
+              if (m) for (var i = 0; i < m[0].length; i++) col = col * 26 + m[0].charCodeAt(i) - 64; else col = cells.length + 1;
+              var t = c.getAttribute('t'), v = kids(c, 'v')[0], val = v ? v.textContent : '';
+              if (t === 's') val = shared[+val] || '';
+              else if (t === 'inlineStr') { var is = kids(c, 'is')[0]; val = is ? is.textContent : ''; }
+              else if (t === 'b') val = val === '1';
+              else if (t !== 'str' && t !== 'e' && val !== '' && !isNaN(val)) val = +val;
+              cells[col - 1] = val;
+            });
+            rows[(+row.getAttribute('r') || rows.length + 1) - 1] = cells;
+          });
+          out.push({ name: sh.name, rows: rows });
+        });
+      }, Promise.resolve()).then(function(){ return out; });
+    });
+  }
+
+  var IMP_MAP = { 'arezzo':'1','verona':'2','isola':'3','veneto':'4','catania':'5','greek':'6','riva lagoons':'6','riva lagoon':'6',
+    'lea':'7','faya':'7','lea & faya':'7','faya - lea':'7','faya & lea':'7','skaia':'8','altea':'8','riva views':'9','riva view':'9','riva':'10','salerno':'10','riva salerno':'10',
+    'blanca':'11','valencia':'12','vectoria':'13','victoria':'13','verdi':'14','marassi bay':'15',
+    'safi':'16','safi 1':'16','safi 2':'16','safi sands':'16','safi sands 1':'16','safi sands 2':'16','safi sands 2 - 1':'16','safi 1 - 2':'16',
+    'celia':'17','marina residences':'18','marina 2':'19','marina west':'19','marina front':'20','marina views':'20','marina promenade':'c2','vida hotel':'c2' };
+  function impSector(loc){
+    var k = String(loc || '').toLowerCase().replace(/\s+/g, ' ').trim(), id = IMP_MAP[k];
+    if (!id) { var s = cfg.sectors.filter(function(x){ return String(x.name).toLowerCase().trim() === k; })[0]; if (s) id = String(s.id); }
+    return id && cfg.sectors.some(function(s){ return String(s.id) === id; }) ? id : 'x1';
+  }
+  function pad2(n){ return (n < 10 ? '0' : '') + n; }
+  function impDate(v){
+    if (typeof v === 'number' && v > 20000 && v < 80000) { var d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 864e5); return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()); }
+    var s = String(v || '').trim().replace(/[٠-٩]/g, function(c){ return '٠١٢٣٤٥٦٧٨٩'.indexOf(c); }), m;
+    if ((m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/))) return m[1] + '-' + pad2(+m[2]) + '-' + pad2(+m[3]);
+    if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/))) return m[3] + '-' + pad2(+m[2]) + '-' + pad2(+m[1]);
+    return '';
+  }
+  function cellStr(v){ return v == null ? '' : String(v).replace(/\s+/g, ' ').trim(); }
+  function unitStr(v){ var s = cellStr(v); return s === '-' ? '' : s; }
+  function findHeader(rows, need){
+    for (var i = 0; i < Math.min(rows.length, 8); i++) {
+      var r = rows[i] || [], idx = {};
+      r.forEach(function(c, j){ var k = cellStr(c).toLowerCase(); if (k && !(k in idx)) idx[k] = j; });
+      if (need.every(function(alts){ return alts.some(function(a){ return a in idx; }); })) {
+        return { at: i, col: function(alts){ for (var x = 0; x < alts.length; x++) if (alts[x] in idx) return idx[alts[x]]; return -1; } };
+      }
+    }
+    return null;
+  }
+  var WPT_TYPE = { residential: 'unit', fm: 'facility', construction: 'project' };
+  function parseOldSheets(sheets){
+    var res = { wpt: [], deleg: [], people: 0, bad: 0, unknown: {}, sheets: [] };
+    // التفويضات: لو فيه شيت All بنقرا منه بس (الباقي نسخ منه)
+    var D = [['location'], ['owner name'], ['delegation names'], ['date from']], W = [['location'], ['type of wpt', 'typ of wpt'], ['start date']];
+    var delegSheets = sheets.filter(function(s){ return findHeader(s.rows, D); });
+    var all = delegSheets.filter(function(s){ return s.name.trim().toLowerCase() === 'all'; });
+    if (all.length) delegSheets = all;
+    var groups = {}, order = [];
+    delegSheets.forEach(function(s){
+      var h = findHeader(s.rows, D), c = { loc: h.col(['location']), unit: h.col(['unit']), owner: h.col(['owner name']), name: h.col(['delegation names']),
+        reason: h.col(['reason']), from: h.col(['date from']), to: h.col(['date to']) };
+      res.sheets.push(s.name);
+      s.rows.slice(h.at + 1).forEach(function(r){
+        if (!r) return;
+        var loc = cellStr(r[c.loc]), unit = unitStr(r[c.unit]), owner = cellStr(r[c.owner]), nm = cellStr(r[c.name]), reason = cellStr(r[c.reason]);
+        if (!loc && !unit && !owner && !nm) return;
+        var from = impDate(r[c.from]), to = c.to >= 0 ? impDate(r[c.to]) : '', note = '';
+        if (!from) { res.bad++; return; }
+        if (!to) { var y = +from.slice(0, 4) + 1; to = y + from.slice(4); note = 'تاريخ النهاية مش متسجل في الشيت القديم، واتحسب سنة من البداية'; }
+        var sec = impSector(loc);
+        if (sec === 'x1') res.unknown[loc || '(فاضي)'] = (res.unknown[loc || '(فاضي)'] || 0) + 1;
+        var key = [loc, unit, owner, reason, from, to].join('|').toLowerCase();
+        if (!groups[key]) { groups[key] = { type: 'delegation', sector: sec, unit: sec === 'x1' && loc ? loc + (unit ? ' · ' + unit : '') : unit, party: owner,
+          from: from, to: to, title: reason ? 'تفويض: ' + reason : 'تفويض', description: '', notes: note, people: [], createdAt: from + 'T07:00:00.000Z' }; order.push(key); }
+        if (nm && !groups[key].people.some(function(p){ return p.name === nm; })) { groups[key].people.push({ name: nm, nid: '', phone: '', role: reason }); res.people++; }
+      });
+    });
+    res.deleg = order.map(function(k){ return groups[k]; });
+    // تصاريح العمل WPT
+    sheets.filter(function(s){ return findHeader(s.rows, W); }).forEach(function(s){
+      var h = findHeader(s.rows, W), c = { cat: h.col(['category', 'residential']), loc: h.col(['location']), unit: h.col(['unit']), desc: h.col(['type of wpt', 'typ of wpt']),
+        comp: h.col(['company']), from: h.col(['start date']), to: h.col(['end date']), flag: h.col(['review flag']) };
+      res.sheets.push(s.name);
+      s.rows.slice(h.at + 1).forEach(function(r){
+        if (!r) return;
+        var loc = cellStr(r[c.loc]), unit = unitStr(r[c.unit]), desc = cellStr(r[c.desc]);
+        if (!loc && !unit && !desc) return;
+        var from = impDate(r[c.from]), to = impDate(r[c.to]);
+        if (!from) { res.bad++; return; }
+        if (!to) to = from;
+        if (typeof r[c.unit] === 'number' && r[c.unit] > 40000 && r[c.unit] < 60000) unit = impDate(r[c.unit]).slice(8) + '/' + impDate(r[c.unit]).slice(5, 7);
+        var sec = impSector(loc), comp = cellStr(r[c.comp]), flag = c.flag >= 0 ? cellStr(r[c.flag]) : '';
+        if (sec === 'x1') res.unknown[loc || '(فاضي)'] = (res.unknown[loc || '(فاضي)'] || 0) + 1;
+        res.wpt.push({ type: WPT_TYPE[cellStr(r[c.cat]).toLowerCase()] || 'other', sector: sec, unit: sec === 'x1' && loc ? loc + (unit ? ' · ' + unit : '') : unit,
+          party: /^(owner|مالك)$/i.test(comp) ? 'المالك' : comp, from: from, to: to, title: '', description: desc,
+          notes: { 'possible duplicate': 'ممكن يكون مكرر في الشيت القديم', 'long duration': 'مدة طويلة' }[flag.toLowerCase()] || '', people: [], createdAt: from + 'T07:00:00.000Z' });
+      });
+    });
+    return res;
+  }
+
+  var impRows = null, impSrc = '';
   $('#impFile').onchange = function(){
     var f = this.files[0], st = $('#impSt'), inp = this; if (!f) return;
-    var r = new FileReader();
-    r.onload = function(){
-      var data; try { data = JSON.parse(r.result); } catch(e){ st.className = 'status warn'; st.textContent = '⚠️ الملف ده مش ملف استيراد.'; return; }
-      var rows = Array.isArray(data) ? data : (data.rows || []), src = data.source || f.name, i = 0, tot = { added: 0, skipped: 0, bad: 0 };
-      if (!rows.length) { st.className = 'status warn'; st.textContent = '⚠️ الملف فاضي.'; return; }
-      inp.disabled = true;
-      (function next(){
-        if (i >= rows.length) {
-          inp.disabled = false; inp.value = ''; st.className = 'status ok';
-          st.textContent = '✓ خلص: اتضاف ' + tot.added + (tot.skipped ? ' · كان متسجل قبل كده ' + tot.skipped : '') + (tot.bad ? ' · ناقص بيانات ' + tot.bad : '');
-          call('resume', token).then(function(x){ cfg = x.config; buildSelects(); renderSectors(); refresh(); });
-          return;
-        }
-        st.className = 'status'; st.textContent = '⏳ بيستورد ' + Math.min(i + 400, rows.length) + ' من ' + rows.length + '...';
-        call('importDocs', token, rows.slice(i, i + 400), src).then(function(x){
-          tot.added += x.added; tot.skipped += x.skipped; tot.bad += x.bad; i += 400; next();
-        }).catch(function(e){ inp.disabled = false; inp.value = ''; st.className = 'status warn'; st.textContent = '⚠️ وقف عند ' + i + ': ' + e.message + ' — ارفع الملف تاني يكمّل.'; });
-      })();
-    };
-    r.readAsText(f);
+    $('#impGo').classList.add('hide'); impRows = null; impSrc = f.name.replace(/\.\w+$/, '');
+    st.className = 'status'; st.textContent = '⏳ بيقرا الملف...';
+    f.arrayBuffer().then(function(buf){
+      if (/\.json$/i.test(f.name)) { var j = JSON.parse(new TextDecoder().decode(buf)); return { json: Array.isArray(j) ? j : (j.rows || []) }; }
+      return readXlsx(buf).then(parseOldSheets);
+    }).then(function(r){
+      inp.value = '';
+      if (r.json) { impRows = r.json; st.className = 'status'; st.textContent = 'ملف فيه ' + impRows.length + ' صف.'; $('#impGo').classList.remove('hide'); return; }
+      impRows = r.wpt.concat(r.deleg);
+      if (!impRows.length) { st.className = 'status warn'; st.textContent = '⚠️ ملقتش في الملف شيتات تصاريح (WPT) أو تفويضات بالأعمدة المعروفة.'; return; }
+      var unk = Object.keys(r.unknown).sort(function(a, b){ return r.unknown[b] - r.unknown[a]; }), nUnk = unk.reduce(function(s, k){ return s + r.unknown[k]; }, 0);
+      st.className = 'status';
+      st.innerHTML = 'لقيت في <b>' + esc(f.name) + '</b> (الشيتات: ' + esc(r.sheets.join('، ')) + '):<br>' +
+        (r.wpt.length ? '• <b>' + r.wpt.length + '</b> تصريح عمل<br>' : '') +
+        (r.deleg.length ? '• <b>' + r.deleg.length + '</b> تفويض، فيهم <b>' + r.people + '</b> مفوَّض<br>' : '') +
+        (nUnk ? '• <span style="color:var(--warn)">' + nUnk + ' مكانهم مش متربط بقطاع، وهيروحوا «أماكن عامة / غير محدد»: ' + esc(unk.slice(0, 8).map(function(k){ return k + ' (' + r.unknown[k] + ')'; }).join('، ')) + (unk.length > 8 ? '…' : '') + '</span><br>' : '') +
+        (r.bad ? '• ' + r.bad + ' صف من غير تاريخ بداية، مش هيتسجلوا<br>' : '') +
+        '<span class="muted">اللي اتسجل قبل كده مش هيتكرر.</span>';
+      $('#impGo').classList.remove('hide');
+    }).catch(function(e){ inp.value = ''; st.className = 'status warn'; st.textContent = '⚠️ ' + e.message; });
+  };
+  $('#impGo').onclick = function(){
+    var rows = impRows, st = $('#impSt'), btn = this, i = 0, tot = { added: 0, skipped: 0, bad: 0 };
+    if (!rows) return;
+    btn.classList.add('hide'); $('#impFile').disabled = true;
+    (function next(){
+      if (i >= rows.length) {
+        $('#impFile').disabled = false; impRows = null; st.className = 'status ok';
+        st.textContent = '✓ خلص: اتضاف ' + tot.added + (tot.skipped ? ' · كان متسجل قبل كده ' + tot.skipped : '') + (tot.bad ? ' · ناقص بيانات ' + tot.bad : '');
+        call('resume', token).then(function(x){ cfg = x.config; buildSelects(); renderSectors(); refresh(); });
+        return;
+      }
+      st.className = 'status'; st.textContent = '⏳ بيستورد ' + Math.min(i + 300, rows.length) + ' من ' + rows.length + '...';
+      call('importDocs', token, rows.slice(i, i + 300), impSrc).then(function(x){
+        tot.added += x.added; tot.skipped += x.skipped; tot.bad += x.bad; i += 300; next();
+      }).catch(function(e){ $('#impFile').disabled = false; st.className = 'status warn'; st.textContent = '⚠️ وقف عند ' + i + ': ' + e.message + ' — ارفع الملف تاني يكمّل من غير تكرار.'; });
+    })();
   };
   function sectorForm(s){
     s = s || { kind: 'سكني' };

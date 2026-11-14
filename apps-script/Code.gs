@@ -260,13 +260,20 @@ function listDocs(token, opts) {
   var user = session_(token);
   opts = opts || {};
   var keepFrom = Utilities.formatDate(new Date(Date.now() - (opts.days || 60) * 864e5), TZ, 'yyyy-MM-dd');
-  var docs = rows_('Docs').filter(function (d) { return canSee_(user, d) && (opts.all || d.to >= keepFrom || !d.to); });
-  var acks = rows_('Acks');
+  var docs;
+  if (opts.q) {   // بحث في كل الداتا (القديمة كمان)
+    var q = norm_(opts.q);
+    docs = rows_('Docs').filter(function (d) {
+      return canSee_(user, d) && norm_([d.refNo, d.unit, d.party, d.contact, d.title, d.description, d.notes, d.people, d.vehicles].join(' ')).indexOf(q) >= 0;
+    }).sort(function (a, b) { return a.to < b.to ? 1 : -1; }).slice(0, 80);
+  } else docs = rows_('Docs').filter(function (d) { return canSee_(user, d) && (opts.all || d.to >= keepFrom || !d.to); });
+  var ackRows = rows_('Acks'), byDoc = {};
+  ackRows.forEach(function (a) { (byDoc[a.docId] = byDoc[a.docId] || []).push(a); });
   var sups = user.role === 'supervisor' ? [] : rows_('Users').filter(function (u) { return u.role === 'supervisor' && u.active === 'yes'; }).map(userObj_);
   return {
     today: today_(),
     docs: docs.map(function (d) {
-      var mine = acks.filter(function (a) { return a.docId === d.id && a.at >= (d.updatedAt || d.createdAt); });
+      var mine = (byDoc[d.id] || []).filter(function (a) { return a.at >= (d.updatedAt || d.createdAt); });
       var o = {};
       SCHEMA.Docs.forEach(function (k) { o[k] = d[k]; });
       o.people = parseJson_(d.people); o.vehicles = parseJson_(d.vehicles);
@@ -280,6 +287,11 @@ function listDocs(token, opts) {
       return o;
     }).sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; })
   };
+}
+
+function norm_(s) {
+  return String(s || '').replace(/[٠-٩]/g, function (c) { return '٠١٢٣٤٥٦٧٨٩'.indexOf(c); })
+    .replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/[\s\-_\/\\.#"{}\[\]:,]/g, '').toLowerCase();
 }
 
 function cleanList_(arr, keys, max) {
@@ -550,7 +562,13 @@ function matchSector_(text, type, sectors) {
 }
 
 // ===== استيراد داتا قديمة (للمدير) =====
-// rows: [{refNo,type,sector,unit,party,from,to,description,notes,createdAt}] — اللي رقمه اتسجل قبل كده بيتشال
+// rows: [{type,sector,unit,party,from,to,title,description,notes,people,createdAt,refNo?}]
+// أي صف متسجل قبل كده (نفس النوع والتواريخ والوحدة والمحتوى) بيتشال، فالملف ممكن يترفع أكتر من مرة عادي.
+function sig_(d) {
+  var n = function (v) { return String(v || '').toLowerCase().replace(/[\s\-_\/\\.·:،,]/g, '').slice(0, 60); };
+  return [d.type, d.from, d.to, n(d.unit), d.type === 'delegation' ? n(d.party) + '|' + n(d.title) : n(d.description)].join('|');
+}
+
 function importDocs(token, rows, source) {
   var user = session_(token);
   need_(user, ['admin']);
@@ -563,18 +581,22 @@ function importDocs(token, rows, source) {
       secs = rows_('Sectors');
     }
     var ids = {}; secs.forEach(function (x) { ids[x.id] = 1; });
-    var seen = {}; rows_('Docs').forEach(function (d) { if (d.refNo) seen[d.refNo] = 1; });
+    var seen = {}, seenRef = {};
+    rows_('Docs').forEach(function (d) { seen[sig_(d)] = 1; if (d.refNo) seenRef[d.refNo] = 1; });
     var sh = sheet_('Docs'), h = header_(sh), out = [], skipped = 0, bad = 0, by = clean_(source || 'استيراد', 60);
     rows.forEach(function (r) {
-      var ref = clean_(r.refNo, 60);
-      if (!ref || seen[ref]) { skipped++; return; }
-      if (!TYPES[r.type] || !ids[r.sector] || !isDate_(r.from) || !isDate_(r.to)) { bad++; return; }
-      seen[ref] = 1;
-      var at = /^\d{4}-\d{2}-\d{2}T/.test(r.createdAt || '') ? r.createdAt : r.from + 'T07:00:00.000Z';
-      var o = { id: Utilities.getUuid().slice(0, 8), createdAt: at, updatedAt: at, createdBy: user.username, createdByName: 'استيراد · ' + by,
-        type: r.type, refNo: ref, sector: r.sector, unit: clean_(r.unit, 120), party: clean_(r.party, 150), from: r.from, to: r.to,
-        description: clean_(r.description, 1500), notes: clean_(r.notes, 500), people: '[]', vehicles: '[]', status: 'active' };
-      out.push(h.map(function (k) { return out_(o[k]); }));
+      var o = { type: r.type, sector: String(r.sector || ''), unit: clean_(r.unit, 120), party: clean_(r.party, 150), from: r.from, to: r.to,
+        title: clean_(r.title, 200), description: clean_(r.description, 1500), notes: clean_(r.notes, 500), refNo: clean_(r.refNo, 60) };
+      if (!TYPES[o.type] || !ids[o.sector] || !isDate_(o.from) || !isDate_(o.to)) { bad++; return; }
+      var k = sig_(o);
+      if (seen[k] || (o.refNo && seenRef[o.refNo])) { skipped++; return; }
+      seen[k] = 1; if (o.refNo) seenRef[o.refNo] = 1;
+      var at = /^\d{4}-\d{2}-\d{2}T/.test(r.createdAt || '') ? r.createdAt : o.from + 'T07:00:00.000Z';
+      o.id = Utilities.getUuid().slice(0, 8); o.createdAt = at; o.updatedAt = at;
+      o.createdBy = user.username; o.createdByName = 'استيراد · ' + by; o.status = 'active';
+      o.people = JSON.stringify(cleanList_(r.people, ['name', 'nid', 'phone', 'role'], 40));
+      o.vehicles = '[]';
+      out.push(h.map(function (k2) { return out_(o[k2]); }));
     });
     if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, h.length).setValues(out);
     return { added: out.length, skipped: skipped, bad: bad };
