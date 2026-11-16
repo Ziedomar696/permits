@@ -17,9 +17,23 @@ var SCHEMA = {
   Sectors: ['id', 'name', 'kind', 'keywords'],
   Docs: ['id', 'createdAt', 'createdBy', 'createdByName', 'type', 'refNo', 'sector', 'unit', 'party', 'contact',
     'from', 'to', 'title', 'description', 'labor', 'people', 'vehicles', 'fileId', 'fileName', 'fileMime',
-    'notes', 'status', 'cancelReason', 'updatedAt'],
-  Acks: ['docId', 'username', 'name', 'at']
+    'notes', 'status', 'cancelReason', 'updatedAt', 'workHours', 'gates'],
+  Acks: ['docId', 'username', 'name', 'at'],
+  Snaps: ['id', 'docId', 'day', 'kind', 'fileId', 'at', 'by', 'byName']
 };
+
+// البوابات (من شيت MSA_Gates): الرئيسية + بوابات كل قطاع حسب رقمه
+var MAIN_GATES = ['Gate 0', 'Surface Park', 'Gate 1', 'Gate 2', 'Gate 3', 'Gate 4'];
+var SECTOR_GATES = {
+  '1': ['Arezzo - Gate'], '2': ['Verona - Gate 1', 'Verona - Gate 2', 'Verona - Gate 3', 'Verona - Gate 4'], '3': ['Isola - Gate'], '4': ['Veneto - Gate'],
+  '5': ['Catania - Gate 1', 'Catania - Gate 2', 'Catania - Gate 3', 'Catania - Gate 4'],
+  '6': ['Greek Main - Gate 1', 'Greek Main - Gate 2', 'Greek APT - Gate', 'Greek & Riva Lagoons - Gate'], '7': ['Lea & Faya - Gate'], '8': ['Skaia & Altea - Gate'],
+  '9': ['Riva Views - Gate'], '10': ['Riva - Gate', 'Salerno - Gate'], '11': ['Blanca P1 - Gate', 'Blanca P2 - Gate', 'Blanca P3 - Gate', 'Blanca P4 - Gate'],
+  '12': ['Valencia - Gate'], '13': ['Vectoria - Gate 1', 'Vectoria - Gate 2'], '14': ['Verdi - Gate 1', 'Verdi - Gate 2'], '15': ['Marassi Bay - Gate 1', 'Marassi Bay - Gate 2'],
+  '16': ['Safi Sands 1 - Gate 1', 'Safi Sands 2 - Gate 1', 'Safi Sands 2 - Gate 2'], '17': ['Celia - Gate'], '18': ['Marina Residences - Gate 1', 'Marina Residences - Gate 2'],
+  '19': ['Marina 2 & Marina West - Gate 1', 'Marina 2 & Marina West - Gate 2'], '20': ['Marina Front & Views - Gate 1', 'Marina Front & Views - Gate 2']
+};
+var SNAP_KINDS = { in: 'الدخول', out: 'الخروج' };
 
 var TYPES = {
   unit: 'تصريح عمل وحدة',
@@ -30,7 +44,8 @@ var TYPES = {
   other: 'أخرى'
 };
 
-var ROLES = { admin: 'مدير النظام', entry: 'إدخال بيانات', supervisor: 'مشرف قطاع', emaar: 'مشرف أمن إعمار' };
+var ROLES = { admin: 'مدير النظام', entry: 'إدخال بيانات', supervisor: 'مشرف قطاع', emaar: 'مشرف أمن إعمار', cctv: 'مراقب CCTV' };
+function scoped_(role) { return role === 'supervisor' || role === 'cctv'; }   // الأدوار اللي ليها قطاعات محددة
 
 var DEFAULT_SECTORS = [
   ['1', 'Arezzo', 'سكني', 'arezzo, اريزو'],
@@ -261,13 +276,13 @@ function changePassword(token, oldPw, newPw) {
 }
 
 function config_() {
-  return { types: TYPES, roles: ROLES, today: today_(),
+  return { types: TYPES, roles: ROLES, today: today_(), mainGates: MAIN_GATES, sectorGates: SECTOR_GATES,
     sectors: rows_('Sectors').map(function (s) { return { id: s.id, name: s.name, kind: s.kind, keywords: s.keywords }; }) };
 }
 
 // ===== المستندات =====
 function canSee_(user, doc) {
-  if (user.role !== 'supervisor') return true;
+  if (!scoped_(user.role)) return true;
   return user.sectors.indexOf('*') >= 0 || user.sectors.indexOf(String(doc.sector)) >= 0;
 }
 
@@ -284,6 +299,8 @@ function listDocs(token, opts) {
       return canSee_(user, d) && norm_([d.refNo, d.unit, d.party, d.contact, d.title, d.description, d.notes, d.people, d.vehicles].join(' ')).indexOf(q) >= 0;
     }).sort(function (a, b) { return a.to < b.to ? 1 : -1; }).slice(0, 80);
   } else docs = rows_('Docs').filter(function (d) { return canSee_(user, d) && (opts.all || d.to >= keepFrom || !d.to); });
+  var snapBy = {};
+  rows_('Snaps').forEach(function (x) { (snapBy[x.docId] = snapBy[x.docId] || []).push({ id: x.id, day: x.day, kind: x.kind, fileId: x.fileId, at: x.at, byName: x.byName }); });
   var ackRows = rows_('Acks'), byDoc = {};
   ackRows.forEach(function (a) { (byDoc[a.docId] = byDoc[a.docId] || []).push(a); });
   var sups = user.role === 'supervisor' ? [] : rows_('Users').filter(function (u) { return u.role === 'supervisor' && u.active === 'yes'; }).map(userObj_);
@@ -293,7 +310,7 @@ function listDocs(token, opts) {
       var mine = (byDoc[d.id] || []).filter(function (a) { return a.at >= (d.updatedAt || d.createdAt); });
       var o = {};
       SCHEMA.Docs.forEach(function (k) { o[k] = d[k]; });
-      o.people = parseJson_(d.people); o.vehicles = parseJson_(d.vehicles);
+      o.people = parseJson_(d.people); o.vehicles = parseJson_(d.vehicles); o.snaps = snapBy[d.id] || [];
       if (user.role === 'supervisor') o.acked = mine.some(function (a) { return a.username === user.username; });
       else {
         var expected = sups.filter(function (s) { return canSee_(s, d); });
@@ -334,7 +351,8 @@ function saveDoc(token, d) {
       people: JSON.stringify(cleanList_(d.people, ['name', 'nid', 'phone', 'role'], 40)),
       vehicles: JSON.stringify(cleanList_(d.vehicles, ['plate', 'model', 'color', 'owner'], 15)),
       fileId: clean_(d.fileId, 120), fileName: clean_(d.fileName, 150), fileMime: clean_(d.fileMime, 60),
-      notes: clean_(d.notes, 500), updatedAt: now_()
+      notes: clean_(d.notes, 500), updatedAt: now_(),
+      workHours: clean_(d.workHours, 40), gates: (Array.isArray(d.gates) ? d.gates : String(d.gates || '').split(',')).map(function (g) { return clean_(g, 60); }).filter(String).slice(0, 20).join(', ')
     };
     if (d.id) {
       var old = rows_('Docs').filter(function (x) { return x.id === d.id; })[0];
@@ -457,11 +475,42 @@ function testOcr() {
   Logger.log(JSON.stringify(parseDoc_(o.text, last.getName(), config_().sectors)));
 }
 
+// ===== لقطات الكاميرات: صورة العمالة وقت دخول الوحدة ووقت الخروج =====
+function snapsFolder_() {
+  var p = PropertiesService.getScriptProperties(), id = p.getProperty('SNAPS_FOLDER_ID');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
+  var f = folder_().createFolder('لقطات CCTV');
+  p.setProperty('SNAPS_FOLDER_ID', f.getId());
+  return f;
+}
+
+function uploadSnap(token, docId, kind, b64) {
+  var user = session_(token);
+  need_(user, ['cctv', 'admin']);
+  if (!SNAP_KINDS[kind]) throw new Error('اختار دخول ولا خروج.');
+  var d = rows_('Docs').filter(function (x) { return x.id === docId; })[0];
+  if (!d || !canSee_(user, d) || d.status === 'cancelled') throw new Error('التصريح ده مش موجود.');
+  var day = today_();
+  if (d.from > day || d.to < day) throw new Error('التصريح ده مش ساري النهارده.');
+  var name = (d.unit || 'unit') + ' - ' + day + ' - ' + SNAP_KINDS[kind] + '.jpg';
+  var file = snapsFolder_().createFile(Utilities.newBlob(Utilities.base64Decode(b64), 'image/jpeg', name));
+  return saveSnap_(user, d.id, kind, file.getId());
+}
+
+function saveSnap_(user, docId, kind, fileId) {
+  return withLock_(function () {
+    var x = { id: Utilities.getUuid().slice(0, 8), docId: docId, day: today_(), kind: kind, fileId: fileId, at: now_(), by: user.username, byName: user.name };
+    append_('Snaps', x);
+    return { id: x.id, day: x.day, kind: x.kind, fileId: x.fileId, at: x.at, byName: x.byName };
+  });
+}
+
 function getFile(token, fileId) {
   var user = session_(token);
   if (!fileId) throw new Error('مفيش مرفق.');
-  if (user.role === 'supervisor') {
-    var ok = rows_('Docs').some(function (d) { return d.fileId === fileId && canSee_(user, d); });
+  if (scoped_(user.role)) {
+    var snapDocs = {}; rows_('Snaps').forEach(function (x) { if (x.fileId === fileId) snapDocs[x.docId] = 1; });
+    var ok = rows_('Docs').some(function (d) { return (d.fileId === fileId || snapDocs[d.id]) && canSee_(user, d); });
     if (!ok) throw new Error('مالكش صلاحية على الملف ده.');
   }
   var f = DriveApp.getFileById(fileId), b = f.getBlob();
@@ -634,8 +683,8 @@ function saveUser(token, d) {
   if (!/^[a-z0-9_\-]{3,40}$/.test(username)) throw new Error('اسم المستخدم إنجليزي وأرقام بس (٣ حروف على الأقل).');
   if (!ROLES[d.role]) throw new Error('اختار الصلاحية.');
   if (!clean_(d.name)) throw new Error('اكتب الاسم.');
-  var sectors = d.role === 'supervisor' ? (d.sectors || []).map(String).filter(String) : ['*'];
-  if (d.role === 'supervisor' && !sectors.length) throw new Error('اختار قطاع واحد على الأقل للمشرف.');
+  var sectors = scoped_(d.role) ? (d.sectors || []).map(String).filter(String) : ['*'];
+  if (scoped_(d.role) && !sectors.length) throw new Error('اختار قطاع واحد على الأقل.');
   return withLock_(function () {
     var u = rows_('Users').filter(function (x) { return x.username === username; })[0];
     if (d.isNew && u) throw new Error('اسم المستخدم ده موجود.');

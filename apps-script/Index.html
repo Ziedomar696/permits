@@ -184,10 +184,16 @@
           <label class="hide">تليفون<input id="f-contact" dir="ltr" inputmode="tel"></label>
           <label>من تاريخ<input id="f-from" type="date"></label>
           <label>إلى تاريخ<input id="f-to" type="date"></label>
+          <label>مواعيد العمل
+            <span style="display:flex;gap:6px;align-items:center"><input id="f-wFrom" type="time" value="09:00"><span class="muted">إلى</span><input id="f-wTo" type="time" value="17:00"></span>
+            <span style="display:flex;gap:6px;align-items:center;font-weight:400;color:var(--ink);margin-top:4px"><input type="checkbox" id="f-wNone" style="width:auto;margin:0">من غير مواعيد محددة</span>
+          </label>
           <label class="hide">عدد العمالة<input id="f-labor" inputmode="numeric"></label>
           <label class="full hide">الموضوع / نوع التصريح<input id="f-title"></label>
           <label class="full" id="l-desc">الوصف<textarea id="f-description"></textarea></label>
         </div>
+        <h4 style="margin:14px 0 4px">البوابات اللي هيدخلوا منها</h4>
+        <div class="secs" id="f-gates"><span class="muted">اختار القطاع الأول.</span></div>
         <h4 style="margin:14px 0 4px"><span id="peopleTitle">الأشخاص</span></h4>
         <table class="ed"><thead><tr><th>الاسم</th><th>رقم قومي / جواز</th><th>تليفون</th><th>الصفة</th><th></th></tr></thead><tbody id="peopleEd"></tbody></table>
         <button class="btn sec sm" id="addPerson" style="margin-top:6px">+ شخص</button>
@@ -240,6 +246,7 @@
   </main>
 </div>
 
+<input type="file" id="snapFile" accept="image/*" capture="environment" class="hide">
 <div id="modal" class="modal hide"><div class="in" id="modalIn"></div></div>
 <div id="toast" class="toast hide"></div>
 
@@ -283,6 +290,7 @@
   function isNewFor(d){
     var s = status(d)[0];
     if (s === 'x' || s === 'old') return false;
+    if (user.role === 'cctv') return s === 'on' && !(snapToday(d, 'in') && snapToday(d, 'out'));
     return user.role === 'supervisor' ? !d.acked : (d.pending || []).length > 0;
   }
   function beep(){
@@ -310,6 +318,9 @@
     });
   }
 
+  function isScoped(){ return user && (user.role === 'supervisor' || user.role === 'cctv'); }
+  function snapToday(d, kind){ return (d.snaps || []).filter(function(x){ return x.day === today && x.kind === kind; }).sort(function(a, b){ return a.at < b.at ? 1 : -1; })[0]; }
+  function hm(iso){ var t = new Date(iso); return isNaN(t) ? '' : (t.getHours() < 10 ? '0' : '') + t.getHours() + ':' + (t.getMinutes() < 10 ? '0' : '') + t.getMinutes(); }
   function canEdit(){ return user && (user.role === 'admin' || user.role === 'entry'); }
 
   // ===== الدخول =====
@@ -357,7 +368,7 @@
   function buildNav(){
     var items = [['list', 'التصاريح']];
     if (canEdit()) items.push(['add', '+ إضافة']);
-    if (user.role !== 'supervisor') items.push(['reports', 'التقارير']);
+    if (['admin', 'entry', 'emaar'].indexOf(user.role) >= 0) items.push(['reports', 'التقارير']);
     if (user.role === 'admin') items.push(['users', 'الحسابات'], ['sectors', 'القطاعات']);
     $('#nav').innerHTML = items.map(function(i){ return '<button data-v="' + i[0] + '">' + i[1] + '</button>'; }).join('');
     $('#nav').classList.toggle('hide', items.length < 2);
@@ -374,7 +385,7 @@
   }
 
   function sectorOptions(onlyMine, onlyKind){
-    var list = cfg.sectors.filter(function(s){ return !onlyMine || user.role !== 'supervisor' || user.sectors.indexOf('*') >= 0 || user.sectors.indexOf(String(s.id)) >= 0; });
+    var list = cfg.sectors.filter(function(s){ return !onlyMine || !isScoped() || user.sectors.indexOf('*') >= 0 || user.sectors.indexOf(String(s.id)) >= 0; });
     var res = '', groups = onlyKind ? [onlyKind] : ['سكني', 'تجاري'];
     groups.forEach(function(g){
       var items = list.filter(function(s){ return (s.kind || 'سكني') === g; });
@@ -385,7 +396,7 @@
   function buildSelects(){
     var mine = sectorOptions(true);
     $('#fSec').innerHTML = '<option value="">كل القطاعات</option>' + mine;
-    $('#fSec').classList.toggle('hide', user.role === 'supervisor' && user.sectors.length < 2 && user.sectors[0] !== '*');
+    $('#fSec').classList.toggle('hide', isScoped() && user.sectors.length < 2 && user.sectors[0] !== '*');
     var tOpts = Object.keys(cfg.types).map(function(k){ return '<option value="' + k + '">' + esc(cfg.types[k]) + '</option>'; }).join('');
     $('#fType').innerHTML = '<option value="">كل الأنواع</option>' + tOpts;
     if (typeof applyGroupFilters === 'function') applyGroupFilters();
@@ -400,7 +411,7 @@
     return call('listDocs', token, {}).then(function(r){
       today = r.today; docs = r.docs;
       var fresh = docs.filter(isNewFor).filter(function(d){ return !seen[d.id + d.updatedAt]; });
-      if (!firstLoad && fresh.length && user.role === 'supervisor') { beep(); toast('وصلك ' + fresh.length + ' جديد'); }
+      if (!firstLoad && fresh.length && isScoped()) { beep(); toast('وصلك ' + fresh.length + ' جديد'); }
       fresh.forEach(function(d){ seen[d.id + d.updatedAt] = 1; });
       firstLoad = false;
       renderList();
@@ -447,7 +458,7 @@
       var mine = gpool.filter(function(d){ return groupOf(d) === g[0]; });
       var n = q0 ? mine.filter(function(d){ return matches(d, q0); }).length : mine.filter(function(d){ return status(d)[0] === 'on'; }).length;
       var nw = mine.filter(isNewFor).length;
-      return '<button class="grp' + (group === g[0] ? ' on' : '') + '" data-g="' + g[0] + '">' + g[1] + ' <small>(' + n + ')</small>' + (nw && user.role === 'supervisor' ? '<b>' + nw + '</b>' : '') + '</button>';
+      return '<button class="grp' + (group === g[0] ? ' on' : '') + '" data-g="' + g[0] + '">' + g[1] + ' <small>(' + n + ')</small>' + (nw && isScoped() ? '<b>' + nw + '</b>' : '') + '</button>';
     }).join('');
     $('#groups').querySelectorAll('.grp').forEach(function(b){ b.onclick = function(){ setGroup(b.dataset.g); }; });
     var allDocs = docs;
@@ -457,7 +468,7 @@
   function renderGroup(){
     var counts = { active: 0, new: 0, soon: 0, old: 0, all: docs.length };
     docs.forEach(function(d){ var s = status(d)[0]; if (s === 'on') counts.active++; if (s === 'soon') counts.soon++; if (s === 'old' || s === 'x') counts.old++; if (isNewFor(d)) counts.new++; });
-    var newLbl = user.role === 'supervisor' ? 'لم أطّلع عليه' : 'بانتظار الاطّلاع';
+    var newLbl = user.role === 'cctv' ? 'ناقص لقطة النهارده' : user.role === 'supervisor' ? 'لم أطّلع عليه' : 'بانتظار الاطّلاع';
     var cs = [['new', newLbl], ['active', 'ساري'], ['soon', 'قادم'], ['old', 'منتهي / ملغي'], ['all', 'الكل']];
     $('#chips').innerHTML = cs.map(function(c){
       return '<button class="chip' + (chip === c[0] ? ' on' : '') + '" data-c="' + c[0] + '">' + c[1] +
@@ -465,7 +476,7 @@
     }).join('');
     $('#chips').querySelectorAll('.chip').forEach(function(b){ b.onclick = function(){ chip = b.dataset.c; renderList(); }; });
     var nb = $('#newBanner');
-    if (user.role === 'supervisor' && counts.new && chip !== 'new') { nb.textContent = '🔔 عندك ' + counts.new + ' تصريح/تفويض جديد لسه ماطّلعتش عليه — اضغط هنا'; nb.classList.remove('hide'); nb.onclick = function(){ chip = 'new'; renderList(); }; }
+    if (isScoped() && counts.new && chip !== 'new') { nb.textContent = user.role === 'cctv' ? '📷 ' + counts.new + ' تصريح ساري النهارده ناقصه لقطة دخول أو خروج — اضغط هنا' : '🔔 عندك ' + counts.new + ' تصريح/تفويض جديد لسه ماطّلعتش عليه — اضغط هنا'; nb.classList.remove('hide'); nb.onclick = function(){ chip = 'new'; renderList(); }; }
     else nb.classList.add('hide');
 
     var q = $('#q').value.trim(), fs = $('#fSec').value, ft = $('#fType').value;
@@ -492,14 +503,17 @@
     var ppl = d.people.slice(0, 4).map(function(p){ return '<span class="tag">👤 ' + esc(p.name || p.nid) + (p.role ? ' · ' + esc(p.role) : '') + '</span>'; }).join('') +
       (d.people.length > 4 ? '<span class="tag">+' + (d.people.length - 4) + '</span>' : '');
     var cars = d.vehicles.map(function(v){ return '<span class="tag">🚗 ' + esc(v.plate) + (v.model ? ' · ' + esc(v.model) : '') + '</span>'; }).join('');
-    var h = '<div class="card t-' + d.type + (isNewFor(d) && user.role === 'supervisor' ? ' new' : '') + '">' +
+    var h = '<div class="card t-' + d.type + (isNewFor(d) && isScoped() ? ' new' : '') + '">' +
       '<div class="row"><span class="badge">' + esc(cfg.types[d.type]) + '</span><span class="st st-' + st[0] + '">' + st[1] + '</span>' +
       (d.refNo ? '<span class="muted" dir="ltr">' + esc(d.refNo) + '</span>' : '') + '</div>' +
       '<div class="ttl">' + esc(d.title || d.description || cfg.types[d.type]) + '</div>' +
       '<div class="meta">📍 <b>' + esc(secName(d.sector)) + '</b>' + (d.unit ? ' · <span dir="auto">' + esc(d.unit) + '</span>' : '') + '</div>' +
       (d.party || d.contact ? '<div class="meta">🏷️ ' + esc(d.party) + (d.contact ? ' · <span dir="ltr">' + esc(d.contact) + '</span>' : '') + '</div>' : '') +
       '<div class="meta">📅 من ' + fmtD(d.from) + ' إلى ' + fmtD(d.to) + left + (d.labor ? ' · 👷 ' + esc(d.labor) + ' عامل' : '') + '</div>' +
+      (d.workHours ? '<div class="meta">🕘 مواعيد العمل: <span dir="ltr">' + esc(d.workHours) + '</span></div>' : '') +
+      (d.gates ? '<div class="meta">🚪 البوابات: ' + esc(d.gates) + '</div>' : '') +
       (ppl || cars ? '<div class="tags">' + ppl + cars + '</div>' : '') +
+      snapLine(d, st[0]) +
       (d.notes ? '<div class="meta" style="color:var(--warn)">📝 ' + esc(d.notes) + '</div>' : '') +
       (d.status === 'cancelled' ? '<div class="meta" style="color:var(--bad)">اتلغى' + (d.cancelReason ? ': ' + esc(d.cancelReason) : '') + '</div>' : '') +
       '<div class="det hide" id="det-' + d.id + '"></div><div class="acts">' +
@@ -509,7 +523,7 @@
     if (user.role === 'supervisor' && d.acked) h += '<span class="muted" style="align-self:center">✓ اطّلعت عليه</span>';
     if (canEdit() && d.status !== 'cancelled') h += '<button class="btn ghost sm" data-a="edit" data-id="' + d.id + '">تعديل</button><button class="btn red sm" data-a="cancel" data-id="' + d.id + '">إلغاء</button>';
     h += '</div>';
-    if (user.role !== 'supervisor' && d.status !== 'cancelled' && (st[0] === 'on' || st[0] === 'soon' || (d.acks || []).length)) {
+    if (['admin', 'entry', 'emaar'].indexOf(user.role) >= 0 && d.status !== 'cancelled' && (st[0] === 'on' || st[0] === 'soon' || (d.acks || []).length)) {
       var a = (d.acks || []).map(function(x){ return esc(x.name); }), p = (d.pending || []).map(esc);
       h += '<div class="ackline">' + (a.length ? '✓ اطّلع: ' + a.join('، ') : '') + (a.length && p.length ? ' · ' : '') +
         (p.length ? '<span class="p">⏳ بانتظار اطّلاع: ' + p.join('، ') + '</span>' : '') + (!a.length && !p.length ? '⚠️ مفيش مشرف متسجل على القطاع ده' : '') + '</div>';
@@ -517,6 +531,27 @@
     return h + '</div>';
   }
 
+  // لقطات الكاميرات النهارده: الدخول والخروج
+  function snapLine(d, s){
+    if (s !== 'on' && !(d.snaps || []).length) return '';
+    var cell = function(kind){
+      var x = snapToday(d, kind), lbl = kind === 'in' ? 'الدخول' : 'الخروج';
+      if (x) return '<button class="btn ghost sm" data-a="snap" data-f="' + esc(x.fileId) + '" data-id="' + d.id + '">📷 ' + lbl + ' ' + hm(x.at) + '</button>';
+      if (user.role === 'cctv' && s === 'on' && d.status !== 'cancelled') return '<button class="btn sm" data-a="shoot" data-k="' + kind + '" data-id="' + d.id + '">📷 صورة ' + lbl + '</button>';
+      return s === 'on' ? '<span class="muted">' + lbl + ': لسه</span>' : '';
+    };
+    var c = cell('in') + cell('out');
+    return c ? '<div class="acts" style="margin-top:6px;align-items:center"><span class="muted">لقطات النهارده:</span>' + c + '</div>' : '';
+  }
+  var shootFor = null;
+  $('#snapFile').onchange = function(){
+    var f = this.files[0], t = shootFor; this.value = ''; if (!f || !t) return;
+    t.btn.disabled = true; t.btn.textContent = '⏳ بيرفع...';
+    shrink(f).then(toB64).then(function(b64){ return call('uploadSnap', token, t.d.id, t.kind, b64); }).then(function(x){
+      t.d.snaps = (t.d.snaps || []).concat([x]); renderList(); toast('اتسجلت صورة ' + (t.kind === 'in' ? 'الدخول' : 'الخروج') + ' ' + hm(x.at));
+    }).catch(function(e){ t.btn.disabled = false; t.btn.textContent = '📷 صورة ' + (t.kind === 'in' ? 'الدخول' : 'الخروج'); toast(e.message); });
+  };
+  $('#list').addEventListener('click', function(e){ var b = e.target.closest('[data-snapf]'); if (b) openFile({ fileId: b.dataset.snapf, fileName: 'لقطة الكاميرا' }); });
   function byId(id){ return docs.concat(found).filter(function(d){ return d.id === id; })[0]; }
   function act(a, id, btn){
     var d = byId(id); if (!d) return;
@@ -526,11 +561,14 @@
         el.innerHTML = (d.description && d.description !== d.title ? '<p style="margin:0 0 6px;white-space:pre-wrap">' + esc(d.description) + '</p>' : '') +
           (d.people.length ? '<table><tr><th>الاسم</th><th>رقم قومي / جواز</th><th>تليفون</th><th>الصفة</th></tr>' + d.people.map(function(p){ return '<tr><td>' + esc(p.name) + '</td><td dir="ltr">' + esc(p.nid) + '</td><td dir="ltr">' + esc(p.phone) + '</td><td>' + esc(p.role) + '</td></tr>'; }).join('') + '</table>' : '') +
           (d.vehicles.length ? '<table style="margin-top:6px"><tr><th>اللوحة</th><th>النوع</th><th>اللون</th><th>صاحبها</th></tr>' + d.vehicles.map(function(v){ return '<tr><td>' + esc(v.plate) + '</td><td>' + esc(v.model) + '</td><td>' + esc(v.color) + '</td><td>' + esc(v.owner) + '</td></tr>'; }).join('') + '</table>' : '') +
+          ((d.snaps || []).length ? '<table style="margin-top:6px"><tr><th>اليوم</th><th>اللقطة</th><th>الوقت</th><th>بواسطة</th><th></th></tr>' + d.snaps.slice().sort(function(a, b){ return a.at < b.at ? 1 : -1; }).map(function(x){ return '<tr><td>' + fmtD(x.day) + '</td><td>' + (x.kind === 'in' ? 'الدخول' : 'الخروج') + '</td><td>' + hm(x.at) + '</td><td>' + esc(x.byName) + '</td><td><button class="btn ghost sm" data-snapf="' + esc(x.fileId) + '">📷 عرض</button></td></tr>'; }).join('') + '</table>' : '') +
           '<p class="muted" style="margin:6px 0 0">اتسجل بواسطة ' + esc(d.createdByName) + ' · ' + fmtT(d.createdAt) + (d.updatedAt !== d.createdAt ? ' · آخر تعديل ' + fmtT(d.updatedAt) : '') + '</p>';
         el.classList.remove('hide'); btn.textContent = 'إخفاء';
       } else { el.classList.add('hide'); btn.textContent = 'التفاصيل'; }
     }
     if (a === 'file') openFile(d);
+    if (a === 'snap') openFile({ fileId: btn.dataset.f, fileName: 'لقطة الكاميرا' });
+    if (a === 'shoot') { shootFor = { d: d, kind: btn.dataset.k, btn: btn }; $('#snapFile').click(); }
     if (a === 'ack') {
       btn.disabled = true;
       call('ackDoc', token, id).then(function(){ d.acked = true; renderList(); toast('اتسجل إنك اطّلعت'); })
@@ -614,6 +652,22 @@
   $('#addPerson').onclick = function(){ edRow('p'); };
   $('#addCar').onclick = function(){ edRow('c'); };
 
+  // ===== البوابات ومواعيد العمل =====
+  function drawGates(checked){
+    var box = $('#f-gates'), sec = $('#f-sector').value;
+    var keep = checked || Array.prototype.map.call(box.querySelectorAll('input:checked'), function(i){ return i.value; });
+    if (!sec) { box.innerHTML = '<span class="muted">اختار القطاع الأول.</span>'; return; }
+    var list = cfg.mainGates.concat(cfg.sectorGates[sec] || []);
+    keep.forEach(function(g){ if (list.indexOf(g) < 0) list.push(g); });
+    box.innerHTML = list.map(function(g){ return '<label><input type="checkbox" value="' + esc(g) + '"' + (keep.indexOf(g) >= 0 ? ' checked' : '') + '>' + esc(g) + '</label>'; }).join('');
+  }
+  $('#f-sector').addEventListener('change', function(){ drawGates(); });
+  $('#f-wNone').addEventListener('change', function(){ $('#f-wFrom').disabled = $('#f-wTo').disabled = this.checked; });
+  function setHours(v){
+    var m = String(v || '').match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/);
+    $('#f-wNone').checked = !m; $('#f-wFrom').value = m ? ('0' + m[1]).slice(-5) : '09:00'; $('#f-wTo').value = m ? ('0' + m[2]).slice(-5) : '17:00';
+    $('#f-wFrom').disabled = $('#f-wTo').disabled = !m;
+  }
   function resetForm(){
     editingId = null; att = null;
     F.forEach(function(k){ $('#f-' + k).value = ''; });
@@ -622,6 +676,7 @@
     $('#peopleEd').innerHTML = ''; $('#carsEd').innerHTML = '';
     $('#pv').innerHTML = ''; $('#pv').classList.add('hide'); $('#scanSt').textContent = ''; $('#ferr').textContent = '';
     $('#addTitle').textContent = 'إضافة تصريح / تفويض'; $('#cancelEdit').classList.add('hide');
+    setHours('09:00 - 17:00'); drawGates([]);
     $('#saveBtn').textContent = 'حفظ وإرسال للمشرفين';
     setLabels();
   }
@@ -630,6 +685,7 @@
     editingId = d.id;
     F.forEach(function(k){ $('#f-' + k).value = d[k] || ''; });
     d.people.forEach(function(p){ edRow('p', p); }); d.vehicles.forEach(function(v){ edRow('c', v); });
+    setHours(d.workHours); drawGates(String(d.gates || '').split(',').map(function(g){ return g.trim(); }).filter(String));
     att = d.fileId ? { fileId: d.fileId, fileName: d.fileName, fileMime: d.fileMime } : null;
     if (att) $('#scanSt').textContent = '📎 المرفق الحالي: ' + (d.fileName || '') + ' — ارفع ملف جديد لو عايز تغيّره';
     $('#addTitle').textContent = 'تعديل: ' + (d.title || cfg.types[d.type]);
@@ -693,6 +749,7 @@
         if (f[k] && !(k === 'type' && f[k] === 'other')) { $('#f-' + k).value = f[k]; got++; }
       });
       (f.people || []).forEach(function(p){ edRow('p', p); got++; });
+      drawGates();
       setLabels();
       if (r.warning) { st.className = 'status warn'; st.textContent = '⚠️ ' + r.warning; }
       else if (got < 3) { st.className = 'status warn'; st.textContent = '⚠️ اتقرا جزء بسيط بس — كمّل الباقي من الصورة يدوي.'; }
@@ -707,6 +764,8 @@
     F.forEach(function(k){ d[k] = $('#f-' + k).value.trim(); });
     if (d.type === 'retail') d.unit = '';
     if (d.type === 'delegation') d.description = '';
+    d.workHours = $('#f-wNone').checked ? '' : $('#f-wFrom').value + ' - ' + $('#f-wTo').value;
+    d.gates = Array.prototype.map.call(document.querySelectorAll('#f-gates input:checked'), function(i){ return i.value; });
     ['refNo', 'contact', 'labor', 'title'].forEach(function(k){ if (!editingId) d[k] = ''; });
     if (att) { d.fileId = att.fileId; d.fileName = att.fileName; d.fileMime = att.fileMime; }
     $('#ferr').textContent = '';
@@ -861,7 +920,7 @@
   function renderUsers(){
     $('#users').innerHTML = '<table><tr><th>الاسم</th><th>المستخدم</th><th>الصلاحية</th><th>القطاعات</th><th></th></tr>' + users.map(function(u, i){
       return '<tr style="' + (u.active ? '' : 'opacity:.5') + '"><td>' + esc(u.name) + '</td><td dir="ltr">' + esc(u.username) + '</td><td>' + esc(u.roleName) + '</td><td>' +
-        (u.role === 'supervisor' ? u.sectors.map(secName).map(esc).join('، ') : 'الكل') + '</td><td><button class="btn ghost sm" data-u="' + i + '">تعديل</button></td></tr>';
+        (u.role === 'supervisor' || u.role === 'cctv' ? u.sectors.map(secName).map(esc).join('، ') : 'الكل') + '</td><td><button class="btn ghost sm" data-u="' + i + '">تعديل</button></td></tr>';
     }).join('') + '</table>';
     $('#users').querySelectorAll('[data-u]').forEach(function(b){ b.onclick = function(){ userForm(users[b.dataset.u]); }; });
   }
@@ -880,8 +939,9 @@
     var HINT = { admin: 'كل حاجة: إضافة وتعديل وإلغاء المستندات، والحسابات والقطاعات.',
       entry: 'بيضيف ويعدّل ويلغي المستندات، وبيشوف كل القطاعات. مالوش دعوة بالحسابات والقطاعات.',
       supervisor: 'بيشوف المستندات بتاعة قطاعاته بس، وبيدوس «تم الاطلاع». مايقدرش يضيف أو يعدّل.',
-      emaar: 'بيشوف كل التصاريح والتفويضات في كل القطاعات، ومين من المشرفين اطّلع، والتقارير. مايقدرش يضيف أو يعدّل أو يلغي.' };
-    var tog = function(){ $('#usecs').classList.toggle('hide', $('#ur').value !== 'supervisor'); $('#rhint').textContent = HINT[$('#ur').value] || ''; };
+      emaar: 'بيشوف كل التصاريح والتفويضات في كل القطاعات، ومين من المشرفين اطّلع، والتقارير. مايقدرش يضيف أو يعدّل أو يلغي.',
+      cctv: 'بيشوف التصاريح الساري النهارده في قطاعاته، ويرفع صورة العمالة من الكاميرا وقت دخول الوحدة ووقت الخروج.' };
+    var tog = function(){ $('#usecs').classList.toggle('hide', ['supervisor', 'cctv'].indexOf($('#ur').value) < 0); $('#rhint').textContent = HINT[$('#ur').value] || ''; };
     $('#ur').onchange = tog; tog();
     $('#uno').onclick = closeDialog;
     $('#uok').onclick = function(){
