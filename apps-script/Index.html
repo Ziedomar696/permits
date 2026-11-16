@@ -42,6 +42,11 @@
   .muted{color:var(--mute);font-size:13px}
   #login{max-width:360px;margin:12vh auto;padding:0 12px}
   #login h2{text-align:center;color:var(--pri);margin:0 0 4px}
+  .groups{display:flex;gap:4px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:10px}
+  .grp{flex:1;border:0;background:none;border-radius:9px;padding:8px 6px;cursor:pointer;font-weight:700;color:var(--mute);font-size:14.5px}
+  .grp small{font-weight:600;opacity:.8}
+  .grp.on{background:var(--pri);color:#fff}
+  .grp b{background:var(--bad);color:#fff;border-radius:10px;padding:0 6px;margin-inline-start:4px;font-size:11px}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
   .chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:5px 12px;cursor:pointer;font-size:13px;font-weight:600}
   .chip.on{background:var(--pri);border-color:var(--pri);color:#fff}
@@ -145,6 +150,7 @@
   <main>
     <section id="v-list">
       <div id="newBanner" class="banner hide"></div>
+      <div class="groups" id="groups"></div>
       <div class="chips" id="chips"></div>
       <div class="filters">
         <input class="q" id="q" placeholder="بحث: اسم، رقم قومي، لوحة، وحدة، رقم تصريح...">
@@ -382,6 +388,7 @@
     $('#fSec').classList.toggle('hide', user.role === 'supervisor' && user.sectors.length < 2 && user.sectors[0] !== '*');
     var tOpts = Object.keys(cfg.types).map(function(k){ return '<option value="' + k + '">' + esc(cfg.types[k]) + '</option>'; }).join('');
     $('#fType').innerHTML = '<option value="">كل الأنواع</option>' + tOpts;
+    if (typeof applyGroupFilters === 'function') applyGroupFilters();
     $('#f-type').innerHTML = tOpts;
     $('#f-sector').innerHTML = '<option value="">— اختار —</option>' + sectorOptions(false);
     $('#f-sector').dataset.kind = '';
@@ -409,13 +416,22 @@
       call('listDocs', token, { q: q }).then(function(r){ if ($('#q').value.trim() !== q) return; found = r.docs; foundQ = q; renderList(); }).catch(function(){});
     }, 450);
   });
-  // فلتر النوع = تصريح محلات → فلتر القطاع يعرض الأماكن التجارية بس
-  $('#fType').addEventListener('input', function(){
-    var sel = $('#fSec'), cur = sel.value, kind = this.value === 'retail' ? 'تجاري' : '';
+  // ===== التصاريح / التفويضات / تصاريح المحلات: كل واحد لوحده =====
+  var GROUPS = [['permits', 'التصاريح', ['unit', 'project', 'facility', 'other']], ['delegation', 'التفويضات', ['delegation']], ['retail', 'تصاريح المحلات', ['retail']]];
+  var group = load('mp-group') || 'permits';
+  if (!GROUPS.some(function(g){ return g[0] === group; })) group = 'permits';
+  function groupOf(d){ for (var i = 0; i < GROUPS.length; i++) if (GROUPS[i][2].indexOf(d.type) >= 0) return GROUPS[i][0]; return 'permits'; }
+  function applyGroupFilters(){
+    var types = GROUPS.filter(function(g){ return g[0] === group; })[0][2];
+    var ft = $('#fType'), curT = ft.value;
+    ft.innerHTML = '<option value="">كل أنواع التصاريح</option>' + types.map(function(k){ return '<option value="' + k + '">' + esc(cfg.types[k]) + '</option>'; }).join('');
+    ft.value = types.indexOf(curT) >= 0 ? curT : '';
+    ft.classList.toggle('hide', types.length < 2);
+    var sel = $('#fSec'), cur = sel.value, kind = group === 'retail' ? 'تجاري' : '';
     sel.innerHTML = '<option value="">' + (kind ? 'كل الأماكن التجارية' : 'كل القطاعات') + '</option>' + sectorOptions(true, kind);
     sel.value = Array.prototype.some.call(sel.options, function(o){ return o.value === cur; }) ? cur : '';
-    renderList();
-  });
+  }
+  function setGroup(g){ group = g; store('mp-group', g); applyGroupFilters(); renderList(); }
 
   function matches(d, q){
     if (!q) return true;
@@ -425,6 +441,20 @@
     return norm(hay).indexOf(norm(q)) >= 0;
   }
   function renderList(){
+    var q0 = $('#q').value.trim(), gpool = docs;
+    if (q0 && foundQ && q0.indexOf(foundQ) === 0) { var hv = {}; docs.forEach(function(d){ hv[d.id] = 1; }); gpool = docs.concat(found.filter(function(d){ return !hv[d.id]; })); }
+    $('#groups').innerHTML = GROUPS.map(function(g){
+      var mine = gpool.filter(function(d){ return groupOf(d) === g[0]; });
+      var n = q0 ? mine.filter(function(d){ return matches(d, q0); }).length : mine.filter(function(d){ return status(d)[0] === 'on'; }).length;
+      var nw = mine.filter(isNewFor).length;
+      return '<button class="grp' + (group === g[0] ? ' on' : '') + '" data-g="' + g[0] + '">' + g[1] + ' <small>(' + n + ')</small>' + (nw && user.role === 'supervisor' ? '<b>' + nw + '</b>' : '') + '</button>';
+    }).join('');
+    $('#groups').querySelectorAll('.grp').forEach(function(b){ b.onclick = function(){ setGroup(b.dataset.g); }; });
+    var allDocs = docs;
+    docs = docs.filter(function(d){ return groupOf(d) === group; });
+    try { renderGroup(); } finally { docs = allDocs; }
+  }
+  function renderGroup(){
     var counts = { active: 0, new: 0, soon: 0, old: 0, all: docs.length };
     docs.forEach(function(d){ var s = status(d)[0]; if (s === 'on') counts.active++; if (s === 'soon') counts.soon++; if (s === 'old' || s === 'x') counts.old++; if (isNewFor(d)) counts.new++; });
     var newLbl = user.role === 'supervisor' ? 'لم أطّلع عليه' : 'لسه مشرفين ماطّلعوش';
@@ -440,7 +470,7 @@
 
     var q = $('#q').value.trim(), fs = $('#fSec').value, ft = $('#fType').value;
     var pool = docs;
-    if (q && foundQ && q.indexOf(foundQ) === 0) { var have = {}; docs.forEach(function(d){ have[d.id] = 1; }); pool = docs.concat(found.filter(function(d){ return !have[d.id]; })); }
+    if (q && foundQ && q.indexOf(foundQ) === 0) { var have = {}; docs.forEach(function(d){ have[d.id] = 1; }); pool = docs.concat(found.filter(function(d){ return !have[d.id] && groupOf(d) === group; })); }
     var list = pool.filter(function(d){
       var s = status(d)[0];
       if (!q) {
@@ -479,7 +509,7 @@
     if (user.role === 'supervisor' && d.acked) h += '<span class="muted" style="align-self:center">✓ اطّلعت عليه</span>';
     if (canEdit() && d.status !== 'cancelled') h += '<button class="btn ghost sm" data-a="edit" data-id="' + d.id + '">تعديل</button><button class="btn red sm" data-a="cancel" data-id="' + d.id + '">إلغاء</button>';
     h += '</div>';
-    if (user.role !== 'supervisor' && d.status !== 'cancelled') {
+    if (user.role !== 'supervisor' && d.status !== 'cancelled' && (st[0] === 'on' || st[0] === 'soon' || (d.acks || []).length)) {
       var a = (d.acks || []).map(function(x){ return esc(x.name); }), p = (d.pending || []).map(esc);
       h += '<div class="ackline">' + (a.length ? '✓ اطّلع: ' + a.join('، ') : '') + (a.length && p.length ? ' · ' : '') +
         (p.length ? '<span class="p">⏳ لسه: ' + p.join('، ') + '</span>' : '') + (!a.length && !p.length ? '⚠️ مفيش مشرف متسجل على القطاع ده' : '') + '</div>';
@@ -587,7 +617,7 @@
   function resetForm(){
     editingId = null; att = null;
     F.forEach(function(k){ $('#f-' + k).value = ''; });
-    $('#f-type').value = 'unit';
+    $('#f-type').value = group === 'permits' ? 'unit' : group;
     $('#f-from').value = today;
     $('#peopleEd').innerHTML = ''; $('#carsEd').innerHTML = '';
     $('#pv').innerHTML = ''; $('#pv').classList.add('hide'); $('#scanSt').textContent = ''; $('#ferr').textContent = '';
