@@ -457,7 +457,7 @@
   function renderGroup(){
     var counts = { active: 0, new: 0, soon: 0, old: 0, all: docs.length };
     docs.forEach(function(d){ var s = status(d)[0]; if (s === 'on') counts.active++; if (s === 'soon') counts.soon++; if (s === 'old' || s === 'x') counts.old++; if (isNewFor(d)) counts.new++; });
-    var newLbl = user.role === 'supervisor' ? 'لم أطّلع عليه' : 'لسه مشرفين ماطّلعوش';
+    var newLbl = user.role === 'supervisor' ? 'لم أطّلع عليه' : 'بانتظار الاطّلاع';
     var cs = [['new', newLbl], ['active', 'ساري'], ['soon', 'قادم'], ['old', 'منتهي / ملغي'], ['all', 'الكل']];
     $('#chips').innerHTML = cs.map(function(c){
       return '<button class="chip' + (chip === c[0] ? ' on' : '') + '" data-c="' + c[0] + '">' + c[1] +
@@ -512,7 +512,7 @@
     if (user.role !== 'supervisor' && d.status !== 'cancelled' && (st[0] === 'on' || st[0] === 'soon' || (d.acks || []).length)) {
       var a = (d.acks || []).map(function(x){ return esc(x.name); }), p = (d.pending || []).map(esc);
       h += '<div class="ackline">' + (a.length ? '✓ اطّلع: ' + a.join('، ') : '') + (a.length && p.length ? ' · ' : '') +
-        (p.length ? '<span class="p">⏳ لسه: ' + p.join('، ') + '</span>' : '') + (!a.length && !p.length ? '⚠️ مفيش مشرف متسجل على القطاع ده' : '') + '</div>';
+        (p.length ? '<span class="p">⏳ بانتظار اطّلاع: ' + p.join('، ') + '</span>' : '') + (!a.length && !p.length ? '⚠️ مفيش مشرف متسجل على القطاع ده' : '') + '</div>';
     }
     return h + '</div>';
   }
@@ -793,7 +793,7 @@
       '<div class="tile"><div class="n num">' + inP.length + '</div><div class="l">مستندات في الفترة</div></div>' +
       '<div class="tile"><div class="n num">' + activeNow.length + '</div><div class="l">ساري النهارده</div></div>' +
       '<div class="tile' + (soon.length ? ' warn' : '') + '"><div class="n num">' + soon.length + '</div><div class="l">⏰ بينتهي خلال ٣ أيام</div></div>' +
-      '<div class="tile' + (pendingDocs.length ? ' warn' : '') + '"><div class="n num">' + pendingDocs.length + '</div><div class="l">⏳ لسه مشرفين ماطّلعوش</div></div>' +
+      '<div class="tile' + (pendingDocs.length ? ' warn' : '') + '"><div class="n num">' + pendingDocs.length + '</div><div class="l">⏳ بانتظار الاطّلاع</div></div>' +
       '<div class="tile"><div class="n num">' + cancelled + '</div><div class="l">اتلغى في الفترة</div></div></div>';
 
     // على مدار الوقت
