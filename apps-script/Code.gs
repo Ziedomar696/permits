@@ -34,6 +34,7 @@ var SECTOR_GATES = {
   '19': ['Marina 2 & Marina West - Gate 1', 'Marina 2 & Marina West - Gate 2'], '20': ['Marina Front & Views - Gate 1', 'Marina Front & Views - Gate 2']
 };
 var SNAP_KINDS = { in: 'الدخول', out: 'الخروج' };
+var SNAP_VIEWERS = ['admin', 'entry', 'cctv'];   // مشرف القطاع ومشرف أمن إعمار ما بيشوفوش اللقطات
 
 var TYPES = {
   unit: 'تصريح عمل وحدة',
@@ -310,7 +311,7 @@ function listDocs(token, opts) {
       var mine = (byDoc[d.id] || []).filter(function (a) { return a.at >= (d.updatedAt || d.createdAt); });
       var o = {};
       SCHEMA.Docs.forEach(function (k) { o[k] = d[k]; });
-      o.people = parseJson_(d.people); o.vehicles = parseJson_(d.vehicles); o.snaps = snapBy[d.id] || [];
+      o.people = parseJson_(d.people); o.vehicles = parseJson_(d.vehicles); o.snaps = SNAP_VIEWERS.indexOf(user.role) >= 0 ? (snapBy[d.id] || []) : [];
       if (user.role === 'supervisor') o.acked = mine.some(function (a) { return a.username === user.username; });
       else {
         var expected = sups.filter(function (s) { return canSee_(s, d); });
@@ -508,8 +509,9 @@ function saveSnap_(user, docId, kind, fileId) {
 function getFile(token, fileId) {
   var user = session_(token);
   if (!fileId) throw new Error('مفيش مرفق.');
+  var snapDocs = {}; rows_('Snaps').forEach(function (x) { if (x.fileId === fileId) snapDocs[x.docId] = 1; });
+  if (Object.keys(snapDocs).length && SNAP_VIEWERS.indexOf(user.role) < 0) throw new Error('مالكش صلاحية على الملف ده.');
   if (scoped_(user.role)) {
-    var snapDocs = {}; rows_('Snaps').forEach(function (x) { if (x.fileId === fileId) snapDocs[x.docId] = 1; });
     var ok = rows_('Docs').some(function (d) { return (d.fileId === fileId || snapDocs[d.id]) && canSee_(user, d); });
     if (!ok) throw new Error('مالكش صلاحية على الملف ده.');
   }

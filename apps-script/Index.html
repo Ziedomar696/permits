@@ -533,6 +533,7 @@
 
   // لقطات الكاميرات النهارده: الدخول والخروج
   function snapLine(d, s){
+    if (['admin', 'entry', 'cctv'].indexOf(user.role) < 0) return '';   // مشرف القطاع ومشرف أمن إعمار ما بيشوفوش اللقطات
     if (s !== 'on' && !(d.snaps || []).length) return '';
     var cell = function(kind){
       var x = snapToday(d, kind), lbl = kind === 'in' ? 'الدخول' : 'الخروج';
