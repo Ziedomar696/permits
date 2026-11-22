@@ -291,6 +291,8 @@
     var s = status(d)[0];
     if (s === 'x' || s === 'old') return false;
     if (user.role === 'cctv') return s === 'on' && !(snapToday(d, 'in') && snapToday(d, 'out'));
+    if (user.role === 'main_gate') { var tm = track(d, today); return !!tm.mi && !tm.mo; }
+    if (user.role === 'sector_gate') { var ts = track(d, today); return !!ts.mi && !ts.si && !ts.mo; }
     return user.role === 'supervisor' ? !d.acked : (d.pending || []).length > 0;
   }
   function beep(){
@@ -320,6 +322,44 @@
 
   function isScoped(){ return user && (user.role === 'supervisor' || user.role === 'cctv'); }
   function snapToday(d, kind){ return (d.snaps || []).filter(function(x){ return x.day === today && x.kind === kind; }).sort(function(a, b){ return a.at < b.at ? 1 : -1; })[0]; }
+  // ===== حركة البوابات والالتزام بالمواعيد =====
+  var GRACE = 15;   // دقايق سماح قبل البداية وبعد النهاية
+  function minOf(iso){ var t = new Date(iso); return t.getHours() * 60 + t.getMinutes(); }
+  function hoursOf(d){ var m = String(d.workHours || '').match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/); return m ? [+m[1] * 60 + +m[2], +m[3] * 60 + +m[4]] : null; }
+  function track(d, day){
+    var ms = (d.moves || []).filter(function(m){ return m.day === day; }).sort(function(a, b){ return a.at < b.at ? -1 : 1; });
+    var f = function(t, k){ return ms.filter(function(m){ return m.gateType === t && m.kind === k; }); };
+    var r = { mi: f('main', 'in')[0], mo: f('main', 'out').slice(-1)[0], si: f('sector', 'in')[0], so: f('sector', 'out').slice(-1)[0], issues: [], any: ms.length > 0 };
+    var h = hoursOf(d), isToday = day === today, now = new Date().getHours() * 60 + new Date().getMinutes();
+    if (r.mo && r.mi && r.mo.at < r.mi.at) r.mo = null;
+    if (h) {
+      if (r.mi && minOf(r.mi.at) < h[0] - GRACE) r.issues.push('دخل بدري ' + (h[0] - minOf(r.mi.at)) + ' دقيقة قبل المواعيد');
+      if (r.mi && minOf(r.mi.at) > h[1] + GRACE) r.issues.push('دخل بعد انتهاء المواعيد');
+      if (r.mo && minOf(r.mo.at) > h[1] + GRACE) r.issues.push('خرج متأخر ' + (minOf(r.mo.at) - h[1]) + ' دقيقة بعد المواعيد');
+      if (r.mi && !r.mo && isToday && now > h[1] + GRACE) r.issues.push('لسه جوه بعد المواعيد بـ ' + (now - h[1]) + ' دقيقة');
+    }
+    if (r.mi && !r.mo && !isToday) r.issues.push('مفيش تسجيل خروج من البوابة الخارجية');
+    if (r.mi && !r.si && isToday && (Date.now() - Date.parse(r.mi.at)) / 60000 > 15 && !r.mo) r.issues.push('دخل من البوابة الخارجية ولسه ماوصلش القطاع');
+    return r;
+  }
+  function moveLine(d, s){
+    if (['admin', 'entry', 'emaar', 'supervisor', 'main_gate', 'sector_gate'].indexOf(user.role) < 0) return '';
+    var t = track(d, today), h = hoursOf(d);
+    var gateBtns = isGateRole() && s === 'on' && d.status !== 'cancelled';
+    if (!t.any && !gateBtns) return '';
+    var cell = function(m, lbl){ return m ? '<span class="tag" style="background:var(--okb)">' + lbl + ' ' + hm(m.at) + (m.gate ? ' · ' + esc(m.gate) : '') + '</span>' : '<span class="tag">' + lbl + ' —</span>'; };
+    var out = '<div class="meta" style="margin-top:6px"><b>🚧 حركة النهارده</b></div><div class="tags">' +
+      cell(t.mi, 'دخل الكمبوند') + cell(t.si, 'وصل القطاع') + cell(t.so, 'خرج من القطاع') + cell(t.mo, 'خرج من الكمبوند') + '</div>';
+    if (t.issues.length) out += '<div class="meta" style="color:var(--bad);font-weight:700">⚠️ ' + t.issues.map(esc).join(' · ') + '</div>';
+    else if (t.mo && h) out += '<div class="meta" style="color:var(--ok);font-weight:700">✓ ملتزم بالمواعيد</div>';
+    if (gateBtns) {
+      var main = user.role === 'main_gate';
+      out += '<div class="acts"><button class="btn okb" data-a="move" data-k="in" data-id="' + d.id + '">✅ ' + (main ? 'دخل' : 'وصل القطاع') + '</button>' +
+        '<button class="btn" data-a="move" data-k="out" data-id="' + d.id + '">🚪 ' + (main ? 'خرج' : 'خرج من القطاع') + '</button></div>';
+    }
+    return out;
+  }
+  function isGateRole(){ return user && (user.role === 'main_gate' || user.role === 'sector_gate'); }
   function hm(iso){ var t = new Date(iso); return isNaN(t) ? '' : (t.getHours() < 10 ? '0' : '') + t.getHours() + ':' + (t.getMinutes() < 10 ? '0' : '') + t.getMinutes(); }
   function canEdit(){ return user && (user.role === 'admin' || user.role === 'entry'); }
 
@@ -468,7 +508,7 @@
   function renderGroup(){
     var counts = { active: 0, new: 0, soon: 0, old: 0, all: docs.length };
     docs.forEach(function(d){ var s = status(d)[0]; if (s === 'on') counts.active++; if (s === 'soon') counts.soon++; if (s === 'old' || s === 'x') counts.old++; if (isNewFor(d)) counts.new++; });
-    var newLbl = user.role === 'cctv' ? 'ناقص لقطة النهارده' : user.role === 'supervisor' ? 'لم أطّلع عليه' : 'بانتظار الاطّلاع';
+    var newLbl = user.role === 'main_gate' ? 'جوه الكمبوند دلوقتي' : user.role === 'sector_gate' ? 'دخلوا ولسه ماوصلوش القطاع' : user.role === 'cctv' ? 'ناقص لقطة النهارده' : user.role === 'supervisor' ? 'لم أطّلع عليه' : 'بانتظار الاطّلاع';
     var cs = [['new', newLbl], ['active', 'ساري'], ['soon', 'قادم'], ['old', 'منتهي / ملغي'], ['all', 'الكل']];
     $('#chips').innerHTML = cs.map(function(c){
       return '<button class="chip' + (chip === c[0] ? ' on' : '') + '" data-c="' + c[0] + '">' + c[1] +
@@ -476,7 +516,8 @@
     }).join('');
     $('#chips').querySelectorAll('.chip').forEach(function(b){ b.onclick = function(){ chip = b.dataset.c; renderList(); }; });
     var nb = $('#newBanner');
-    if (isScoped() && counts.new && chip !== 'new') { nb.textContent = user.role === 'cctv' ? '📷 ' + counts.new + ' تصريح ساري النهارده ناقصه لقطة دخول أو خروج — اضغط هنا' : '🔔 عندك ' + counts.new + ' تصريح/تفويض جديد لسه ماطّلعتش عليه — اضغط هنا'; nb.classList.remove('hide'); nb.onclick = function(){ chip = 'new'; renderList(); }; }
+    if (user.role === 'sector_gate' && counts.new && chip !== 'new') { nb.textContent = '🚧 ' + counts.new + ' عمالة دخلت من البوابة الخارجية وجاية على القطاع — اضغط هنا'; nb.classList.remove('hide'); nb.onclick = function(){ chip = 'new'; renderList(); }; }
+    else if (isScoped() && counts.new && chip !== 'new') { nb.textContent = user.role === 'cctv' ? '📷 ' + counts.new + ' تصريح ساري النهارده ناقصه لقطة دخول أو خروج — اضغط هنا' : '🔔 عندك ' + counts.new + ' تصريح/تفويض جديد لسه ماطّلعتش عليه — اضغط هنا'; nb.classList.remove('hide'); nb.onclick = function(){ chip = 'new'; renderList(); }; }
     else nb.classList.add('hide');
 
     var q = $('#q').value.trim(), fs = $('#fSec').value, ft = $('#fType').value;
@@ -513,7 +554,7 @@
       (d.workHours ? '<div class="meta">🕘 مواعيد العمل: <span dir="ltr">' + esc(d.workHours) + '</span></div>' : '') +
       (d.gates ? '<div class="meta">🚪 البوابات: ' + esc(d.gates) + '</div>' : '') +
       (ppl || cars ? '<div class="tags">' + ppl + cars + '</div>' : '') +
-      snapLine(d, st[0]) +
+      snapLine(d, st[0]) + moveLine(d, st[0]) +
       (d.notes ? '<div class="meta" style="color:var(--warn)">📝 ' + esc(d.notes) + '</div>' : '') +
       (d.status === 'cancelled' ? '<div class="meta" style="color:var(--bad)">اتلغى' + (d.cancelReason ? ': ' + esc(d.cancelReason) : '') + '</div>' : '') +
       '<div class="det hide" id="det-' + d.id + '"></div><div class="acts">' +
@@ -562,6 +603,7 @@
         el.innerHTML = (d.description && d.description !== d.title ? '<p style="margin:0 0 6px;white-space:pre-wrap">' + esc(d.description) + '</p>' : '') +
           (d.people.length ? '<table><tr><th>الاسم</th><th>رقم قومي / جواز</th><th>تليفون</th><th>الصفة</th></tr>' + d.people.map(function(p){ return '<tr><td>' + esc(p.name) + '</td><td dir="ltr">' + esc(p.nid) + '</td><td dir="ltr">' + esc(p.phone) + '</td><td>' + esc(p.role) + '</td></tr>'; }).join('') + '</table>' : '') +
           (d.vehicles.length ? '<table style="margin-top:6px"><tr><th>اللوحة</th><th>النوع</th><th>اللون</th><th>صاحبها</th></tr>' + d.vehicles.map(function(v){ return '<tr><td>' + esc(v.plate) + '</td><td>' + esc(v.model) + '</td><td>' + esc(v.color) + '</td><td>' + esc(v.owner) + '</td></tr>'; }).join('') + '</table>' : '') +
+          ((d.moves || []).length ? '<table style="margin-top:6px"><tr><th>اليوم</th><th>البوابة</th><th>الحركة</th><th>الوقت</th><th>سجّلها</th></tr>' + d.moves.slice().sort(function(a, b){ return a.at < b.at ? 1 : -1; }).map(function(m){ return '<tr><td>' + fmtD(m.day) + '</td><td>' + esc(m.gate) + '</td><td>' + (m.gateType === 'main' ? (m.kind === 'in' ? 'دخل الكمبوند' : 'خرج من الكمبوند') : (m.kind === 'in' ? 'وصل القطاع' : 'خرج من القطاع')) + '</td><td>' + hm(m.at) + '</td><td>' + esc(m.byName) + '</td></tr>'; }).join('') + '</table>' : '') +
           ((d.snaps || []).length ? '<table style="margin-top:6px"><tr><th>اليوم</th><th>اللقطة</th><th>الوقت</th><th>بواسطة</th><th></th></tr>' + d.snaps.slice().sort(function(a, b){ return a.at < b.at ? 1 : -1; }).map(function(x){ return '<tr><td>' + fmtD(x.day) + '</td><td>' + (x.kind === 'in' ? 'الدخول' : 'الخروج') + '</td><td>' + hm(x.at) + '</td><td>' + esc(x.byName) + '</td><td><button class="btn ghost sm" data-snapf="' + esc(x.fileId) + '">📷 عرض</button></td></tr>'; }).join('') + '</table>' : '') +
           '<p class="muted" style="margin:6px 0 0">اتسجل بواسطة ' + esc(d.createdByName) + ' · ' + fmtT(d.createdAt) + (d.updatedAt !== d.createdAt ? ' · آخر تعديل ' + fmtT(d.updatedAt) : '') + '</p>';
         el.classList.remove('hide'); btn.textContent = 'إخفاء';
@@ -569,6 +611,16 @@
     }
     if (a === 'file') openFile(d);
     if (a === 'snap') openFile({ fileId: btn.dataset.f, fileName: 'لقطة الكاميرا' });
+    if (a === 'move') {
+      var tt = track(d, today), main = user.role === 'main_gate', k = btn.dataset.k;
+      var dup = k === 'in' ? (main ? tt.mi && !tt.mo : tt.si && !tt.so) : (main ? tt.mo : tt.so);
+      var go = function(){
+        btn.disabled = true;
+        call('recordMove', token, d.id, k).then(function(m){ d.moves = (d.moves || []).concat([m]); renderList(); toast('اتسجل ' + (k === 'in' ? (main ? 'الدخول' : 'الوصول للقطاع') : 'الخروج') + ' ' + hm(m.at)); })
+          .catch(function(e){ btn.disabled = false; toast(e.message); });
+      };
+      if (dup) ask('متسجل قبل كده النهارده. تسجّل تاني؟', { ok: 'أيوه سجّل' }).then(function(r){ if (r) go(); }); else go();
+    }
     if (a === 'shoot') { shootFor = { d: d, kind: btn.dataset.k, btn: btn }; $('#snapFile').click(); }
     if (a === 'ack') {
       btn.disabled = true;
@@ -900,6 +952,22 @@
         return '<tr><td>' + esc(r[0]) + '</td><td class="num">' + r[1] + '</td><td class="num">' + r[2] + '</td><td class="num"' + (r[3] ? ' style="color:var(--warn);font-weight:700"' : '') + '>' + r[3] + '</td><td>' + dur(r[4]) + '</td></tr>';
       }).join('') + '</table>' : '<p class="muted">مفيش حسابات مشرفين لسه.</p>') + '</div>';
 
+    // الالتزام بمواعيد العمل (من حركة البوابات)
+    var vio = [], tracked = 0, okDays = 0;
+    all.forEach(function(d){
+      var days = {}; (d.moves || []).forEach(function(m){ if (m.day >= pr[0] && m.day <= pr[1]) days[m.day] = 1; });
+      Object.keys(days).forEach(function(day){
+        var r = track(d, day); tracked++;
+        if (r.issues.length) vio.push({ day: day, d: d, r: r }); else okDays++;
+      });
+    });
+    vio.sort(function(a, b){ return a.day < b.day ? 1 : -1; });
+    h += '<div class="box"><div class="ch-t">🚧 الالتزام بمواعيد العمل (من البوابات)</div><div class="ch-s">' +
+      (tracked ? tracked + ' يوم شغل اتسجلت حركته · ' + okDays + ' ملتزم · <b style="color:var(--bad)">' + vio.length + ' فيه مخالفة</b> · سماح ' + GRACE + ' دقيقة' : 'لسه مفيش حركة متسجلة من البوابات في الفترة دي') + '</div>' +
+      (vio.length ? '<table><tr><th>اليوم</th><th>القطاع</th><th>الوحدة / الاسم</th><th>المواعيد</th><th>دخل / خرج</th><th>المخالفة</th></tr>' + vio.slice(0, 200).map(function(v){
+        return '<tr><td>' + fmtD(v.day) + '</td><td>' + esc(secName(v.d.sector)) + '</td><td>' + esc([v.d.unit, v.d.party].filter(String).join(' · ')) + '</td><td dir="ltr">' + esc(v.d.workHours || '—') + '</td><td dir="ltr">' + (v.r.mi ? hm(v.r.mi.at) : '—') + ' / ' + (v.r.mo ? hm(v.r.mo.at) : '—') + '</td><td style="color:var(--bad)">' + v.r.issues.map(esc).join('<br>') + '</td></tr>';
+      }).join('') + '</table>' : '') + '</div>';
+
     // بينتهي قريب
     h += '<div class="box"><div class="ch-t">⏰ بينتهي خلال ٣ أيام</div>' + (soon.length ? '<table><tr><th>النوع</th><th>القطاع</th><th>الوحدة / الاسم</th><th>ينتهي</th></tr>' + soon.map(function(d){
       return '<tr><td>' + esc(cfg.types[d.type]) + '</td><td>' + esc(secName(d.sector)) + '</td><td>' + esc([d.unit, d.party].filter(String).join(' · ')) + '</td><td>' + fmtD(d.to) + (d.to === t ? ' (النهارده)' : '') + '</td></tr>';
@@ -921,7 +989,7 @@
   function renderUsers(){
     $('#users').innerHTML = '<table><tr><th>الاسم</th><th>المستخدم</th><th>الصلاحية</th><th>القطاعات</th><th></th></tr>' + users.map(function(u, i){
       return '<tr style="' + (u.active ? '' : 'opacity:.5') + '"><td>' + esc(u.name) + '</td><td dir="ltr">' + esc(u.username) + '</td><td>' + esc(u.roleName) + '</td><td>' +
-        (u.role === 'supervisor' || u.role === 'cctv' ? u.sectors.map(secName).map(esc).join('، ') : 'الكل') + '</td><td><button class="btn ghost sm" data-u="' + i + '">تعديل</button></td></tr>';
+        (u.gate ? '🚪 ' + esc(u.gate) + ' · ' : '') + (u.role === 'supervisor' || u.role === 'cctv' || u.role === 'sector_gate' ? u.sectors.map(secName).map(esc).join('، ') : 'الكل') + '</td><td><button class="btn ghost sm" data-u="' + i + '">تعديل</button></td></tr>';
     }).join('') + '</table>';
     $('#users').querySelectorAll('[data-u]').forEach(function(b){ b.onclick = function(){ userForm(users[b.dataset.u]); }; });
   }
@@ -934,6 +1002,7 @@
       '<label>اسم المستخدم (إنجليزي)<input id="uu" dir="ltr" value="' + esc(u.username || '') + '"' + (isNew ? '' : ' disabled') + '></label>' +
       '<label>الصلاحية<select id="ur">' + Object.keys(cfg.roles).map(function(k){ return '<option value="' + k + '"' + (u.role === k ? ' selected' : '') + '>' + esc(cfg.roles[k]) + '</option>'; }).join('') + '</select></label>' +
       '<label>' + (isNew ? 'الباسورد' : 'باسورد جديد (سيبه فاضي لو مش هتغيّره)') + '<input id="upw" dir="ltr"></label></div>' +
+      '<label id="ugate" class="hide" style="margin-top:10px">البوابة<select id="ug"></select></label>' +
       '<p class="muted" id="rhint" style="margin:8px 0 0"></p><div id="usecs" style="margin-top:10px"><label>القطاعات اللي هيستلمها</label><div class="secs">' + secs + '</div></div>' +
       (isNew ? '' : '<label style="margin-top:10px;display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="checkbox" id="ua" style="width:auto;margin:0"' + (u.active ? ' checked' : '') + '>الحساب شغال</label>') +
       '<div class="err" id="uerr"></div><div class="row"><button class="btn" id="uok">حفظ</button><button class="btn ghost" id="uno">رجوع</button></div>');
@@ -941,14 +1010,22 @@
       entry: 'بيضيف ويعدّل ويلغي المستندات، وبيشوف كل القطاعات. مالوش دعوة بالحسابات والقطاعات.',
       supervisor: 'بيشوف المستندات بتاعة قطاعاته بس، وبيدوس «تم الاطلاع». مايقدرش يضيف أو يعدّل.',
       emaar: 'بيشوف كل التصاريح والتفويضات في كل القطاعات، ومين من المشرفين اطّلع، والتقارير. مايقدرش يضيف أو يعدّل أو يلغي.',
-      cctv: 'بيشوف التصاريح الساري النهارده في قطاعاته، ويرفع صورة العمالة من الكاميرا وقت دخول الوحدة ووقت الخروج.' };
-    var tog = function(){ $('#usecs').classList.toggle('hide', ['supervisor', 'cctv'].indexOf($('#ur').value) < 0); $('#rhint').textContent = HINT[$('#ur').value] || ''; };
+      cctv: 'بيشوف التصاريح الساري النهارده في قطاعاته، ويرفع صورة العمالة من الكاميرا وقت دخول الوحدة ووقت الخروج.',
+      main_gate: 'حساب بوابة خارجية: بيشوف تصاريح النهارده المسموح تدخل منها، ويسجّل دخول وخروج العمالة من الكمبوند.',
+      sector_gate: 'حساب بوابة قطاع: بيشوف تصاريح القطاع النهارده، وبيعرف مين دخل من البوابة الخارجية وجاي، ويسجّل وصولهم وخروجهم من القطاع.' };
+    var tog = function(){
+      var r = $('#ur').value;
+      $('#usecs').classList.toggle('hide', ['supervisor', 'cctv'].indexOf(r) < 0); $('#rhint').textContent = HINT[r] || '';
+      $('#ugate').classList.toggle('hide', r !== 'main_gate' && r !== 'sector_gate');
+      if (r === 'main_gate') $('#ug').innerHTML = cfg.mainGates.map(function(g){ return '<option' + (u.gate === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('');
+      if (r === 'sector_gate') $('#ug').innerHTML = Object.keys(cfg.sectorGates).map(function(k){ return '<optgroup label="' + esc(secName(k)) + '">' + cfg.sectorGates[k].map(function(g){ return '<option' + (u.gate === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</optgroup>'; }).join('');
+    };
     $('#ur').onchange = tog; tog();
     $('#uno').onclick = closeDialog;
     $('#uok').onclick = function(){
       var d = { isNew: isNew, username: $('#uu').value, name: $('#un').value, role: $('#ur').value, password: $('#upw').value,
         active: isNew ? true : $('#ua').checked,
-        sectors: Array.prototype.map.call(document.querySelectorAll('#usecs input:checked'), function(i){ return i.value; }) };
+        sectors: Array.prototype.map.call(document.querySelectorAll('#usecs input:checked'), function(i){ return i.value; }), gate: $('#ug').value };
       call('saveUser', token, d).then(function(){ closeDialog(); toast('اتحفظ'); loadUsers(); refresh(); }).catch(function(e){ $('#uerr').textContent = e.message; });
     };
   }
