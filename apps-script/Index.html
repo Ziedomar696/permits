@@ -552,7 +552,7 @@
       (d.party || d.contact ? '<div class="meta">🏷️ ' + esc(d.party) + (d.contact ? ' · <span dir="ltr">' + esc(d.contact) + '</span>' : '') + '</div>' : '') +
       '<div class="meta">📅 من ' + fmtD(d.from) + ' إلى ' + fmtD(d.to) + left + (d.labor ? ' · 👷 ' + esc(d.labor) + ' عامل' : '') + '</div>' +
       (d.workHours ? '<div class="meta">🕘 مواعيد العمل: <span dir="ltr">' + esc(d.workHours) + '</span></div>' : '') +
-      (d.gates ? '<div class="meta">🚪 البوابات: ' + esc(d.gates) + '</div>' : '') +
+      (d.gates ? '<div class="meta">🚪 البوابات: ' + esc(d.gates) + '</div>' : secGates(d.sector).length ? '<div class="meta">🚪 البوابات: ' + esc(secGates(d.sector).join(', ')) + ' <span class="muted">(بوابات القطاع)</span></div>' : '') +
       (ppl || cars ? '<div class="tags">' + ppl + cars + '</div>' : '') +
       snapLine(d, st[0]) + moveLine(d, st[0]) +
       (d.notes ? '<div class="meta" style="color:var(--warn)">📝 ' + esc(d.notes) + '</div>' : '') +
@@ -706,9 +706,12 @@
   $('#addCar').onclick = function(){ edRow('c'); };
 
   // ===== البوابات ومواعيد العمل =====
+  function secGates(id){ var s = cfg.sectors.filter(function(x){ return String(x.id) === String(id); })[0]; return s && s.gates ? s.gates.split(',').map(function(g){ return g.trim(); }).filter(String) : []; }
   function drawGates(checked){
     var box = $('#f-gates'), sec = $('#f-sector').value;
-    var keep = checked || Array.prototype.map.call(box.querySelectorAll('input:checked'), function(i){ return i.value; });
+    // لما القطاع يتغيّر في تصريح جديد، بتتعلّم بوابات القطاع اللي الإدارة محددها
+    var keep = checked || (box.dataset.sec !== sec && !editingId ? secGates(sec) : Array.prototype.map.call(box.querySelectorAll('input:checked'), function(i){ return i.value; }));
+    box.dataset.sec = sec;
     if (!sec) { box.innerHTML = '<span class="muted">اختار القطاع الأول.</span>'; return; }
     var list = cfg.mainGates.concat(cfg.sectorGates[sec] || []);
     keep.forEach(function(g){ if (list.indexOf(g) < 0) list.push(g); });
@@ -1032,8 +1035,8 @@
 
   // ===== القطاعات =====
   function renderSectors(){
-    $('#sectors').innerHTML = '<table><tr><th>القطاع / المكان</th><th>النوع</th><th>كلمات مفتاحية</th><th></th></tr>' + cfg.sectors.map(function(s, i){
-      return '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.kind) + '</td><td class="muted">' + esc(s.keywords) + '</td><td><button class="btn ghost sm" data-s="' + i + '">تعديل</button></td></tr>';
+    $('#sectors').innerHTML = '<table><tr><th>القطاع / المكان</th><th>النوع</th><th>بوابات العمالة</th><th>كلمات مفتاحية</th><th></th></tr>' + cfg.sectors.map(function(s, i){
+      return '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.kind) + '</td><td>' + (s.gates ? esc(s.gates) : '<span class="muted">مش متحددة (كل البوابات)</span>') + '</td><td class="muted">' + esc(s.keywords) + '</td><td><button class="btn ghost sm" data-s="' + i + '">تعديل</button></td></tr>';
     }).join('') + '</table>';
     $('#sectors').querySelectorAll('[data-s]').forEach(function(b){ b.onclick = function(){ sectorForm(cfg.sectors[b.dataset.s]); }; });
   }
@@ -1226,16 +1229,21 @@
       }).catch(function(e){ $('#impFile').disabled = false; st.className = 'status warn'; st.textContent = '⚠️ وقف عند ' + i + ': ' + e.message + ' — ارفع الملف تاني يكمّل من غير تكرار.'; });
     })();
   };
+  function gateChecks(list, s){ var on = s.id ? secGates(s.id) : []; return list.map(function(g){ return '<label><input type="checkbox" value="' + esc(g) + '"' + (on.indexOf(g) >= 0 ? ' checked' : '') + '>' + esc(g) + '</label>'; }).join(''); }
   function sectorForm(s){
     s = s || { kind: 'سكني' };
     dialog('<b>' + (s.id ? 'تعديل ' + esc(s.name) : 'قطاع / مكان جديد') + '</b><div class="grid" style="margin-top:10px">' +
       '<label>الاسم<input id="sn" value="' + esc(s.name || '') + '"></label>' +
       '<label>النوع<select id="sk"><option' + (s.kind === 'سكني' ? ' selected' : '') + '>سكني</option><option' + (s.kind === 'تجاري' ? ' selected' : '') + '>تجاري</option></select></label>' +
       '<label class="full">كلمات مفتاحية (افصل بفاصلة)<input id="skw" value="' + esc(s.keywords || '') + '"></label></div>' +
+      '<h4 style="margin:12px 0 4px">البوابات اللي العمالة تدخل منها</h4><p class="muted" style="margin:0 0 4px">بتتعلّم لوحدها في أي تصريح جديد للقطاع ده، والبوابات التانية مش هتشوف تصاريحه.</p>' +
+      '<div class="muted" style="margin-top:6px">خارجية</div><div class="secs" id="sgM">' + gateChecks(cfg.mainGates, s) + '</div>' +
+      '<div class="muted" style="margin-top:6px">داخلية (بوابات القطاع)</div><div class="secs" id="sgS">' + ((cfg.sectorGates[s.id] || []).length ? gateChecks(cfg.sectorGates[s.id], s) : '<span class="muted">القطاع ده مالوش بوابات داخلية في القايمة.</span>') + '</div>' +
       '<div class="err" id="serr"></div><div class="row"><button class="btn" id="sok">حفظ</button><button class="btn ghost" id="sno">رجوع</button></div>');
     $('#sno').onclick = closeDialog;
     $('#sok').onclick = function(){
-      call('saveSector', token, { id: s.id, name: $('#sn').value, kind: $('#sk').value, keywords: $('#skw').value })
+      var gates = Array.prototype.map.call(document.querySelectorAll('#sgM input:checked, #sgS input:checked'), function(i){ return i.value; });
+      call('saveSector', token, { id: s.id, name: $('#sn').value, kind: $('#sk').value, keywords: $('#skw').value, gates: gates })
         .then(function(c){ cfg = c; today = c.today; closeDialog(); buildSelects(); renderSectors(); toast('اتحفظ'); }).catch(function(e){ $('#serr').textContent = e.message; });
     };
   }

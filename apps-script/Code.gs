@@ -14,7 +14,7 @@ var TZ = 'Africa/Cairo';
 
 var SCHEMA = {
   Users: ['username', 'name', 'role', 'sectors', 'hash', 'salt', 'active', 'createdAt', 'gate'],
-  Sectors: ['id', 'name', 'kind', 'keywords'],
+  Sectors: ['id', 'name', 'kind', 'keywords', 'gates'],
   Docs: ['id', 'createdAt', 'createdBy', 'createdByName', 'type', 'refNo', 'sector', 'unit', 'party', 'contact',
     'from', 'to', 'title', 'description', 'labor', 'people', 'vehicles', 'fileId', 'fileName', 'fileMime',
     'notes', 'status', 'cancelReason', 'updatedAt', 'workHours', 'gates'],
@@ -282,7 +282,7 @@ function changePassword(token, oldPw, newPw) {
 
 function config_() {
   return { types: TYPES, roles: ROLES, today: today_(), mainGates: MAIN_GATES, sectorGates: SECTOR_GATES,
-    sectors: rows_('Sectors').map(function (s) { return { id: s.id, name: s.name, kind: s.kind, keywords: s.keywords }; }) };
+    sectors: rows_('Sectors').map(function (s) { return { id: s.id, name: s.name, kind: s.kind, keywords: s.keywords, gates: s.gates || '' }; }) };
 }
 
 // ===== المستندات =====
@@ -494,10 +494,17 @@ function gateSees_(user, d) {
   var day = today_();
   if (d.status === 'cancelled' || d.from > day || d.to < day) return false;
   if (user.role === 'sector_gate' && String(d.sector) !== sectorOfGate_(user.gate)) return false;
-  var list = String(d.gates || '').split(',').map(function (g) { return g.trim(); }).filter(String);
+  var list = String(d.gates || sectorGatesOf_(d.sector)).split(',').map(function (g) { return g.trim(); }).filter(String);
   if (!list.length) return true;
   if (user.role === 'main_gate') return list.indexOf(user.gate) >= 0 || !list.some(function (g) { return MAIN_GATES.indexOf(g) >= 0; });
   return list.indexOf(user.gate) >= 0 || !list.some(function (g) { return !!sectorOfGate_(g); });
+}
+
+// البوابات اللي الإدارة حددتها للقطاع (بتتطبق على أي تصريح مالوش بوابات محددة)
+var _secGates = null;
+function sectorGatesOf_(id) {
+  if (!_secGates) { _secGates = {}; rows_('Sectors').forEach(function (x) { _secGates[x.id] = x.gates || ''; }); }
+  return _secGates[String(id)] || '';
 }
 
 function recordMove(token, docId, kind) {
@@ -755,7 +762,11 @@ function saveSector(token, d) {
     var list = rows_('Sectors'), s = d.id ? list.filter(function (x) { return x.id === d.id; })[0] : null;
     if (!s) s = { id: 's' + Utilities.getUuid().slice(0, 5) };
     s.name = clean_(d.name, 80); s.kind = d.kind === 'تجاري' ? 'تجاري' : 'سكني'; s.keywords = clean_(d.keywords, 300);
+    // البوابات المسموحة للعمالة في القطاع ده (خارجية + داخلية)
+    var allowed = MAIN_GATES.concat(SECTOR_GATES[s.id] || []);
+    s.gates = (Array.isArray(d.gates) ? d.gates : []).filter(function (g) { return allowed.indexOf(g) >= 0; }).join(', ');
     if (s._row) update_('Sectors', s._row, s); else append_('Sectors', s);
+    _secGates = null;
     return config_();
   });
 }
